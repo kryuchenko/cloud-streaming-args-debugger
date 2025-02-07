@@ -653,7 +653,7 @@ void ArgumentDebuggerWindow::RenderFrame() {
         d2d_render_target_->DrawBitmap(qr_bitmap_.Get(), D2D1::RectF(qr_x, qr_y, qr_x + qr_size, qr_y + qr_size));
     }
 
-    // End Direct2D drawing (use DX_CALL to hide HRESULT usage)
+    // End Direct2D drawing
     DX_CALL(d2d_render_target_->EndDraw(), "Failed to end Direct2D draw.");
 
     // Present the frame.
