@@ -9,6 +9,12 @@ This is a simple Windows application that shows your command-line arguments in a
 - **QR Code:** Generates and displays a QR code with the current UNIX time, FPS, and your arguments (updates every 5 seconds).
 - **Keyboard Input:** Type into the window and if you type `exit` (or press Escape), the app will close.
 
+## Screenshot
+
+Check out a preview of the application:
+
+![CLI Arguments Debugger Screenshot](images/screenshot.jpg)
+
 ## How to Build
 
 1. **Requirements:**
