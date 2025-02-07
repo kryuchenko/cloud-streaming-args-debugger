@@ -45,7 +45,6 @@ using qrcodegen::QrCode;
 using Microsoft::WRL::ComPtr;
 
 // Helper macro that calls a DirectX function and throws an exception on failure.
-// This hides the explicit use of HRESULT in our code.
 #define DX_CALL(expr, msg) do { auto hr = (expr); if (FAILED(hr)) throw std::runtime_error(msg); } while(0)
 
 // Helper function: robust conversion from std::wstring to std::string using WideCharToMultiByte (UTF-8)
@@ -654,10 +653,8 @@ void ArgumentDebuggerWindow::RenderFrame() {
         d2d_render_target_->DrawBitmap(qr_bitmap_.Get(), D2D1::RectF(qr_x, qr_y, qr_x + qr_size, qr_y + qr_size));
     }
 
-    HRESULT end_hr = d2d_render_target_->EndDraw();
-    if (end_hr == D2DERR_RECREATE_TARGET) {
-        // Handle resource recreation if needed (omitted)
-    }
+    // End Direct2D drawing (use DX_CALL to hide HRESULT usage)
+    DX_CALL(d2d_render_target_->EndDraw(), "Failed to end Direct2D draw.");
 
     // Present the frame.
     swap_chain_->Present(1, 0);
