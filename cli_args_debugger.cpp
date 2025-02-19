@@ -1,3 +1,4 @@
+//
 // cli_args_debugger.cpp
 //
 // Build Requirements:
@@ -30,6 +31,10 @@
 #include <ctime>
 #include <cstdint>
 #include <array>
+#include <shlobj.h>
+#include <knownfolders.h>
+#include <cstdio>
+#include <fstream>
 
 // Link with required libraries
 #pragma comment(lib, "d2d1")
@@ -67,7 +72,7 @@ constexpr const wchar_t* kWindowCaption   = L"Argument Debugger";
 const std::vector<std::wstring> kDescriptionLines = {
     L"Argument Debugger",
     L"This utility displays all command-line arguments in a full-screen window.",
-    L"Type 'exit' and press Enter to quit."
+    L"Type 'exit', 'save' or 'read' and press Enter to execute commands."
 };
 
 constexpr float kMargin     = 20.0f;
@@ -109,7 +114,13 @@ private:
     void RenderFrame();
     void Cleanup();
     void UpdateRotation(float delta_time);
+
+    // Update QR code – here we add the FPS synchronization logic.
     void UpdateQrCode(ULONGLONG current_time);
+
+    // New methods for file operations (saving/loading data)
+    void SaveData();
+    void ReadData();
 
     HWND window_handle_ = nullptr;
     bool is_running_ = true;
@@ -118,10 +129,18 @@ private:
     std::wstring user_input_;
     std::vector<std::wstring> args_;
 
-    // Variables for the QR code and FPS
-    ComPtr<ID2D1Bitmap> qr_bitmap_;
-    ULONGLONG last_qr_update_time_ = 0;
+    // New variables for displaying command status and loaded data:
+    std::wstring command_status_;
+    std::wstring loaded_data_;
+
+    // Variables for FPS and QR code
     float current_fps_ = 0.0f;
+    // Adding a variable for "synchronized" FPS,
+    // which will be the same as what is shown in the QR code.
+    int synced_fps_ = 0;
+
+    ULONGLONG last_qr_update_time_ = 0;
+    ComPtr<ID2D1Bitmap> qr_bitmap_;
 
     // Direct2D and DirectWrite objects
     ComPtr<ID2D1Factory> d2d_factory_;
@@ -195,11 +214,21 @@ int ArgumentDebuggerWindow::RunMessageLoop() {
     return static_cast<int>(msg.wParam);
 }
 
+// Keyboard input handling: added support for "save" and "read" commands
 void ArgumentDebuggerWindow::OnCharInput(wchar_t ch) {
     if (ch == VK_RETURN) {
         if (_wcsicmp(user_input_.c_str(), L"exit") == 0) {
             PostQuitMessage(0);
             is_running_ = false;
+        }
+        else if (_wcsicmp(user_input_.c_str(), L"save") == 0) {
+            SaveData();
+        }
+        else if (_wcsicmp(user_input_.c_str(), L"read") == 0) {
+            ReadData();
+        }
+        else {
+            command_status_ = L"Unknown command.";
         }
         user_input_.clear();
     }
@@ -359,6 +388,7 @@ void ArgumentDebuggerWindow::CreateShadersAndGeometry() {
         "    output.Color = input.Color;"
         "    return output;"
         "}";
+
     // Pixel shader source code.
     constexpr const char ps_src[] =
         "struct PS_INPUT { float4 Pos : SV_POSITION; float3 Color : COLOR; };"
@@ -389,18 +419,18 @@ void ArgumentDebuggerWindow::CreateShadersAndGeometry() {
 
     // Define input layout.
     std::array<D3D11_INPUT_ELEMENT_DESC, 2> layout_desc = {{
-        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"COLOR",    0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0}
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,   D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"COLOR",    0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,  D3D11_INPUT_PER_VERTEX_DATA, 0}
     }};
     DX_CALL(
         d3d_device_->CreateInputLayout(layout_desc.data(), static_cast<UINT>(layout_desc.size()),
-                                         vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(),
-                                         vertex_layout_.GetAddressOf()),
+                                       vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(),
+                                       vertex_layout_.GetAddressOf()),
         "Failed to create input layout."
     );
     immediate_context_->IASetInputLayout(vertex_layout_.Get());
 
-    // Define vertices.
+    // Define vertices (cube).
     std::array<SimpleVertex, 8> vertices = {{
         // Front face
         {DirectX::XMFLOAT3(-1.0f,  1.0f, -1.0f), DirectX::XMFLOAT3(1.0f, 0.0f, 0.0f)},
@@ -456,28 +486,35 @@ void ArgumentDebuggerWindow::CreateShadersAndGeometry() {
 }
 
 void ArgumentDebuggerWindow::UpdateQrCode(ULONGLONG current_time) {
+    // Update the QR code no more than once every 5 seconds.
     if (current_time - last_qr_update_time_ < 5000)
-        return; // Throttle updates to once every 5 seconds.
+        return;
     last_qr_update_time_ = current_time;
 
     time_t unix_time = time(nullptr);
+    // Get the integer value of FPS.
+    int fps_for_qr = static_cast<int>(current_fps_);
+
+    // Save this value for synchronized file output.
+    synced_fps_ = fps_for_qr;
+
+    // Create the string for the QR code
     std::ostringstream oss;
-    oss << "t=" << unix_time << ";f=" << static_cast<int>(current_fps_);
+    oss << "t=" << unix_time << ";f=" << fps_for_qr;
     if (!args_.empty()) {
         oss << ";args=";
         for (const auto& arg : args_) {
-            // Convert wide string to narrow string before streaming.
             oss << wstring_to_string(arg) << " ";
         }
     }
     std::string qr_data = oss.str();
 
-    // Use QrCodeGen to create a standard QR code with error correction level MEDIUM.
+    // Generate the QR code (error correction level MEDIUM).
     QrCode qr = QrCode::encodeText(qr_data.c_str(), QrCode::Ecc::MEDIUM);
     int qr_modules = qr.getSize();
-    constexpr int pixel_size = 375;  // QR code size: 375x375 pixels
+    constexpr int pixel_size = 375;  // final size 375x375
     float scale = static_cast<float>(pixel_size) / qr_modules;
-    std::vector<uint32_t> pixels(pixel_size * pixel_size, 0xffffffff); // White background
+    std::vector<uint32_t> pixels(pixel_size * pixel_size, 0xffffffff); // white background
 
     for (int y = 0; y < pixel_size; y++) {
         for (int x = 0; x < pixel_size; x++) {
@@ -485,7 +522,7 @@ void ArgumentDebuggerWindow::UpdateQrCode(ULONGLONG current_time) {
             int module_y = static_cast<int>(y / scale);
             if (module_x < qr_modules && module_y < qr_modules) {
                 if (qr.getModule(module_x, module_y))
-                    pixels[y * pixel_size + x] = 0xff000000; // Black
+                    pixels[y * pixel_size + x] = 0xff000000; // black pixel
             }
         }
     }
@@ -496,9 +533,7 @@ void ArgumentDebuggerWindow::UpdateQrCode(ULONGLONG current_time) {
     bitmapProperties.dpiX = 96.0f;
     bitmapProperties.dpiY = 96.0f;
 
-    // Reset previous bitmap.
     qr_bitmap_.Reset();
-
     DX_CALL(
         d2d_render_target_->CreateBitmap(
             D2D1::SizeU(pixel_size, pixel_size),
@@ -516,12 +551,12 @@ void ArgumentDebuggerWindow::RenderFrame() {
     float delta_time = (current_time - last_time_) / 1000.0f;
     last_time_ = current_time;
 
-    // Update FPS (instantaneous value)
+    // Update the instantaneous FPS
     current_fps_ = (delta_time > 0.0f) ? (1.0f / delta_time) : 0.0f;
 
     UpdateRotation(delta_time);
 
-    // Clear the Direct3D render target.
+    // Clear the D3D render target
     FLOAT clear_color[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
     immediate_context_->ClearRenderTargetView(d3d_render_target_view_.Get(), clear_color);
     immediate_context_->OMSetRenderTargets(1, d3d_render_target_view_.GetAddressOf(), nullptr);
@@ -568,6 +603,7 @@ void ArgumentDebuggerWindow::RenderFrame() {
     // Update the QR code (no more than once every 5 seconds).
     UpdateQrCode(current_time);
 
+    // Create brushes.
     ComPtr<ID2D1SolidColorBrush> white_brush, green_brush, yellow_brush;
     DX_CALL(
         d2d_render_target_->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), white_brush.GetAddressOf()),
@@ -589,7 +625,7 @@ void ArgumentDebuggerWindow::RenderFrame() {
     for (const auto& line : kDescriptionLines) {
         D2D1_RECT_F rect = D2D1::RectF(kMargin, y_pos, size.width - kMargin, y_pos + kLineHeight);
         d2d_render_target_->DrawTextW(line.c_str(), static_cast<UINT32>(line.size()),
-                                       text_format_.Get(), rect, white_brush.Get());
+                                      text_format_.Get(), rect, white_brush.Get());
         y_pos += kLineHeight;
     }
     y_pos += kLineHeight;
@@ -601,7 +637,7 @@ void ArgumentDebuggerWindow::RenderFrame() {
     {
         D2D1_RECT_F rect = D2D1::RectF(kMargin, y_pos, size.width - kMargin, y_pos + kLineHeight);
         d2d_render_target_->DrawTextW(cli_text.c_str(), static_cast<UINT32>(cli_text.size()),
-                                       text_format_.Get(), rect, green_brush.Get());
+                                      text_format_.Get(), rect, green_brush.Get());
     }
     y_pos += kLineHeight;
 
@@ -613,50 +649,48 @@ void ArgumentDebuggerWindow::RenderFrame() {
         }
         D2D1_RECT_F args_rect = D2D1::RectF(kMargin, y_pos, size.width - kMargin, size.height - 200.0f);
         d2d_render_target_->DrawTextW(joined_args.c_str(), static_cast<UINT32>(joined_args.size()),
-                                       text_format_.Get(), args_rect, green_brush.Get());
+                                      text_format_.Get(), args_rect, green_brush.Get());
         y_pos += kLineHeight;
     }
 
     y_pos += 10.0f;
-    // Move the "Character count:" text 50 pixels lower to avoid overlap.
-    y_pos += 50.0f;
-    size_t char_count = 0;
-    for (const auto& arg : args_) {
-        char_count += arg.size() + 1;
-    }
-    if (char_count > 0)
-        --char_count;
-    std::wstring count_str = L"Character count: " + std::to_wstring(char_count);
+    // Additional drawing: display command execution status.
     {
-        D2D1_RECT_F rect = D2D1::RectF(kMargin, y_pos, size.width - kMargin, y_pos + kLineHeight);
-        d2d_render_target_->DrawTextW(count_str.c_str(), static_cast<UINT32>(count_str.size()),
-                                       text_format_.Get(), rect, green_brush.Get());
+        D2D1_RECT_F status_rect = D2D1::RectF(kMargin, size.height - 160.0f, size.width - kMargin, size.height - 130.0f);
+        d2d_render_target_->DrawTextW(command_status_.c_str(), static_cast<UINT32>(command_status_.size()),
+                                      text_format_.Get(), status_rect, white_brush.Get());
     }
 
-    std::wstring exit_prompt = L"Type 'exit' and press Enter to quit:";
+    // Draw loaded data (if any) in the top-right corner.
+    if (!loaded_data_.empty()) {
+        D2D1_RECT_F data_rect = D2D1::RectF(size.width - 400.0f, kMargin, size.width - kMargin, kMargin + 150.0f);
+        d2d_render_target_->DrawTextW(loaded_data_.c_str(), static_cast<UINT32>(loaded_data_.size()),
+                                      text_format_.Get(), data_rect, green_brush.Get());
+    }
+
+    // Input field and prompt.
+    std::wstring exit_prompt = L"Type 'exit', 'save' or 'read' and press Enter to quit:";
     D2D1_RECT_F exit_prompt_rect = D2D1::RectF(kMargin, size.height - 100.0f, size.width - kMargin, size.height - 70.0f);
     d2d_render_target_->DrawTextW(exit_prompt.c_str(), static_cast<UINT32>(exit_prompt.size()),
-                                   text_format_.Get(), exit_prompt_rect, yellow_brush.Get());
+                                  text_format_.Get(), exit_prompt_rect, yellow_brush.Get());
 
     D2D1_RECT_F user_input_rect = D2D1::RectF(kMargin, size.height - 60.0f, size.width - kMargin, size.height - 30.0f);
     d2d_render_target_->DrawTextW(user_input_.c_str(), static_cast<UINT32>(user_input_.size()),
-                                   text_format_.Get(), user_input_rect, green_brush.Get());
+                                  text_format_.Get(), user_input_rect, green_brush.Get());
 
-    // Draw the QR code in the lower-left corner.
-    // The left and bottom margins remain fixed at 60 pixels,
-    // the QR code size is 375×375 pixels, and it is raised by 100 pixels.
+    // Draw the QR code in the bottom-left corner.
     if (qr_bitmap_) {
         constexpr int qr_size = 375;
-        constexpr float qr_margin = 60.0f; // fixed margin
+        constexpr float qr_margin = 60.0f;
         float qr_x = qr_margin;
         float qr_y = size.height - qr_size - qr_margin - 100.0f;
         d2d_render_target_->DrawBitmap(qr_bitmap_.Get(), D2D1::RectF(qr_x, qr_y, qr_x + qr_size, qr_y + qr_size));
     }
 
-    // End Direct2D drawing
+    // End Direct2D drawing.
     DX_CALL(d2d_render_target_->EndDraw(), "Failed to end Direct2D draw.");
 
-    // Present the frame.
+    // Present the frame on screen.
     swap_chain_->Present(1, 0);
 }
 
@@ -681,6 +715,72 @@ void ArgumentDebuggerWindow::Cleanup() {
     d2d_render_target_.Reset();
     d2d_factory_.Reset();
     qr_bitmap_.Reset();
+}
+
+// Method for saving data (timestamp and FPS) to %APPDATA%\ArgumentDebugger\saved_data.txt
+void ArgumentDebuggerWindow::SaveData() {
+    PWSTR appdata_path = nullptr;
+    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
+    if (SUCCEEDED(hr)) {
+        std::wstring folder_path = appdata_path;
+        CoTaskMemFree(appdata_path);
+        folder_path += L"\\ArgumentDebugger";
+        // Create the directory if it does not exist yet.
+        if (!CreateDirectoryW(folder_path.c_str(), nullptr)) {
+            DWORD err = GetLastError();
+            if (err != ERROR_ALREADY_EXISTS) {
+                command_status_ = L"Error creating directory.";
+                return;
+            }
+        }
+        std::wstring file_path = folder_path + L"\\saved_data.txt";
+        FILE* file = nullptr;
+        // Open the file for writing
+        if (_wfopen_s(&file, file_path.c_str(), L"w, ccs=UTF-8") == 0 && file) {
+            time_t timestamp = time(nullptr);
+            // Write synced_fps_ so it matches the QR code value
+            fwprintf(file, L"Timestamp: %lld\nFPS: %d\n",
+                     static_cast<long long>(timestamp),
+                     synced_fps_);
+            fclose(file);
+            command_status_ = L"Data saved successfully.";
+        } else {
+            command_status_ = L"Error opening file for writing.";
+        }
+    }
+    else {
+        command_status_ = L"Error retrieving AppData path.";
+    }
+}
+
+// Method for loading data from %APPDATA%\ArgumentDebugger\saved_data.txt
+void ArgumentDebuggerWindow::ReadData() {
+    PWSTR appdata_path = nullptr;
+    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
+    if (SUCCEEDED(hr)) {
+        std::wstring folder_path = appdata_path;
+        CoTaskMemFree(appdata_path);
+        folder_path += L"\\ArgumentDebugger";
+        std::wstring file_path = folder_path + L"\\saved_data.txt";
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, file_path.c_str(), L"r, ccs=UTF-8") == 0 && file) {
+            wchar_t buffer[256];
+            loaded_data_.clear();
+            // Read file contents line by line.
+            while (fgetws(buffer, 256, file)) {
+                loaded_data_ += buffer;
+            }
+            fclose(file);
+            command_status_ = L"Data loaded successfully.";
+        }
+        else {
+            command_status_ = L"File not found.";
+            loaded_data_.clear();
+        }
+    }
+    else {
+        command_status_ = L"Error retrieving AppData path.";
+    }
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
