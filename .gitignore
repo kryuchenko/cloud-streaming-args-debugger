@@ -1,0 +1,31 @@
+# Build output
+/build/
+/obj/
+
+# Visual Studio files
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+
+# CMake build files
+/out/
+/CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.ninja
+.ninja_*
+
+# vcpkg files
+/vcpkg_installed/
+/vcpkg/
+
+# Temporary files
+*.tmp
+
+# QR Code generator source files (downloaded during build)
+qrcodegen.cpp
+qrcodegen.hpp

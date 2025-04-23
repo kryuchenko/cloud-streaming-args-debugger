@@ -1,0 +1,8 @@
+{
+    "name": "directx-args-debugger",
+    "version-string": "0.1.0",
+    "dependencies": [
+        "gtest"
+    ],
+    "builtin-baseline": "9b22b41c5d295ea26192d310d8c4c30f5f96bb10"
+}
