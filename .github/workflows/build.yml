@@ -83,9 +83,23 @@ jobs:
     - name: Setup vcpkg & install GoogleTest (classic mode)
       shell: pwsh
       run: |
-        git clone https://github.com/microsoft/vcpkg.git vcpkg
-        .\vcpkg\bootstrap-vcpkg.bat
-        .\vcpkg\vcpkg.exe install gtest:x64-windows --classic
+        # Remove any existing vcpkg directory if present
+        if (Test-Path -Path "vcpkg") {
+            Remove-Item -Path "vcpkg" -Recurse -Force
+        }
+        
+        # Clone vcpkg repository
+        git clone https://github.com/microsoft/vcpkg.git
+        
+        # Bootstrap vcpkg
+        Set-Location -Path vcpkg
+        & .\bootstrap-vcpkg.bat
+        
+        # Install GoogleTest in classic mode
+        & .\vcpkg.exe install gtest:x64-windows --classic
+        
+        # Return to the original directory
+        Set-Location -Path ${{ github.workspace }}
         
     - name: Configure & build with CMake
       shell: pwsh

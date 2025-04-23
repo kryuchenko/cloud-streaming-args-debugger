@@ -1,6 +1,6 @@
 # CLI Arguments Debugger
 
-[![Build & Test Status](https://github.com/kryuchenko/directx-args-debugger/actions/workflows/build.yml/badge.svg)](https://github.com/kryuchenko/directx-args-debugger/actions/workflows/build.yml)
+[![Build and Test](https://github.com/kryuchenko/directx-args-debugger/actions/workflows/build.yml/badge.svg)](https://github.com/kryuchenko/directx-args-debugger/actions/workflows/build.yml)
 
 This is a simple Windows application that shows your command-line arguments in a full-screen window. It also displays a rotating 3D cube and a QR code that updates with the current timestamp, FPS, and the arguments you passed.
 

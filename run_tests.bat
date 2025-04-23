@@ -1,9 +1,9 @@
 @echo off
 setlocal
 
-:: Create required directories
-mkdir build\tests 2>nul
-mkdir obj 2>nul
+:: Create required directories if they don't exist
+if not exist build\tests mkdir build\tests
+if not exist obj mkdir obj
 
 :: Compile the tests
 cl /EHsc /std:c++20 /permissive- /I. /DUNICODE /D_UNICODE ^

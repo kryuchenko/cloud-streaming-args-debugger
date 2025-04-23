@@ -89,10 +89,10 @@ TEST_F(CliArgsTest, ArgumentsWithSpaces) {
 
 // Test for non-ASCII arguments
 TEST_F(CliArgsTest, NonAsciiArguments) {
-    std::vector<std::wstring> args = { L"Привет", L"мир" };
+    std::vector<std::wstring> args = { L"こんにちは", L"世界" };
     
     std::wstring expectedHeader = L"Received the following arguments:";
-    std::wstring expectedArgsLine = L"Привет мир";
+    std::wstring expectedArgsLine = L"こんにちは 世界";
     
     std::wstring actualHeader = BuildCliHeaderText(args);
     std::wstring actualArgsLine = BuildCliArgsText(args);
