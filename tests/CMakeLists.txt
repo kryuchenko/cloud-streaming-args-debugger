@@ -29,13 +29,15 @@ set(TEST_SOURCES
     fps_calculation_tests.cpp
 )
 
-# Add qrcodegen source files from parent directory
-set(QRCODEGEN_SOURCES
+# Add source files from parent directory that contain functions we're testing
+set(PARENT_SOURCES
     ../qrcodegen.cpp
+    ../cli_args_debugger.cpp
+    ../seh_wrapper.cpp
 )
 
 # Define test executable as console application (without WIN32 flag)
-add_executable(cli_args_tests ${TEST_SOURCES} ${QRCODEGEN_SOURCES})
+add_executable(cli_args_tests ${TEST_SOURCES} ${PARENT_SOURCES})
 
 # Link with GoogleTest and Windows libraries
 target_link_libraries(cli_args_tests PRIVATE 
@@ -43,16 +45,22 @@ target_link_libraries(cli_args_tests PRIVATE
     GTest::gtest_main
     shell32  # For SHGetKnownFolderPath
     ole32    # For COM functions
+    d3d11    # For DirectX
+    d2d1     # For Direct2D
+    dwrite   # For DirectWrite
+    dxgi     # For DXGI
+    avrt     # For AvSetMmThreadCharacteristics
 )
 
 # Windows-specific compiler options
 if(MSVC)
     target_compile_options(cli_args_tests PRIVATE "/EHsc")
     
-    # Explicitly specify UNICODE
+    # Explicitly specify UNICODE and exclude main from cli_args_debugger.cpp
     target_compile_definitions(cli_args_tests PRIVATE 
         "UNICODE" 
         "_UNICODE"
+        "EXCLUDE_MAIN"  # To exclude wWinMain from cli_args_debugger.cpp
     )
     
     # Explicitly specify console subsystem for the linker

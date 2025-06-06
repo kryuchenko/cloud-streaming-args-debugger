@@ -332,6 +332,7 @@ private:
     std::wstring                  mic_name_;   // FriendlyName ("USB Mic (Realtek ...)")
 };
 
+#ifndef EXCLUDE_MAIN
 int WINAPI wWinMain(HINSTANCE h_instance, HINSTANCE, PWSTR, int cmd_show) {
     try {
         // Initialize COM once at the start - STA is the safest option for UI thread and D2D
@@ -397,6 +398,7 @@ int WINAPI wWinMain(HINSTANCE h_instance, HINSTANCE, PWSTR, int cmd_show) {
         return -1;
     }
 }
+#endif // EXCLUDE_MAIN
 
 void ArgumentDebuggerWindow::Initialize(HINSTANCE h_instance, int cmd_show, const std::vector<std::wstring>& args) {
     args_ = args;

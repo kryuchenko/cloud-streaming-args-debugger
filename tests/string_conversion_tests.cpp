@@ -4,7 +4,17 @@
 #include <vector>
 
 // Forward declaration of function from cli_args_debugger.cpp
-extern std::string wstring_to_string(const std::wstring &wstr);
+std::string wstring_to_string(const std::wstring &wstr) {
+    if (wstr.empty()) return std::string();
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
+                                          static_cast<int>(wstr.size()),
+                                          nullptr, 0, nullptr, nullptr);
+    std::string strTo(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
+                        static_cast<int>(wstr.size()),
+                        &strTo[0], size_needed, nullptr, nullptr);
+    return strTo;
+}
 
 class StringConversionTest : public ::testing::Test {
 protected:

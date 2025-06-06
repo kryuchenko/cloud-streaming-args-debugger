@@ -8,6 +8,9 @@
 // Forward declaration from seh_wrapper.cpp
 extern "C" DWORD WINAPI RawAudioThreadWithSEH(LPVOID param) noexcept;
 
+// Forward declaration for LogSEH
+extern void LogSEH(const wchar_t* message);
+
 // Mock class to simulate ArgumentDebuggerWindow for testing
 class MockArgumentDebuggerWindow {
 public:
