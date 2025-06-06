@@ -937,7 +937,7 @@ void ArgumentDebuggerWindow::RenderFrame() {
     y_pos += 10.0f;
     // Additional drawing: display command execution status.
     {
-        D2D1_RECT_F status_rect = D2D1::RectF(kMargin, size.height - 160.0f, size.width - kMargin, size.height - 130.0f);
+        D2D1_RECT_F status_rect = D2D1::RectF(kMargin, size.height - 220.0f, size.width - kMargin, size.height - 190.0f);
         d2d_render_target_->DrawText(command_status_.c_str(), static_cast<UINT32>(command_status_.size()),
                                       text_format_.Get(), status_rect, white_brush.Get());
     }
@@ -954,6 +954,85 @@ void ArgumentDebuggerWindow::RenderFrame() {
         D2D1_RECT_F title_rect = D2D1::RectF(size.width - 750.0f, kMargin - 30.0f, size.width - kMargin, kMargin);
         d2d_render_target_->DrawText(L"Log File Contents:", 17,
                                      text_format_.Get(), title_rect, yellow_brush.Get());
+    }
+
+    // Display full and relative path where the application is running
+    wchar_t exePath[MAX_PATH] = L"\0";
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring fullPath = exePath;
+    
+    // Get current working directory for relative path
+    wchar_t currentDir[MAX_PATH] = L"\0";
+    GetCurrentDirectoryW(MAX_PATH, currentDir);
+    std::wstring currentDirStr = currentDir;
+    
+    // Extract just the executable name
+    std::wstring exeName = fullPath;
+    size_t lastSlash = exeName.find_last_of(L"\\");
+    if (lastSlash != std::wstring::npos) {
+        exeName = exeName.substr(lastSlash + 1);
+    }
+    
+    // Extract directory from full path
+    std::wstring exeDir = fullPath;
+    if (lastSlash != std::wstring::npos) {
+        exeDir = exeDir.substr(0, lastSlash);
+    }
+    
+    // Calculate relative path
+    std::wstring relativePath;
+    if (fullPath.find(currentDirStr) == 0) {
+        // If the exe is within the current directory, show relative path
+        relativePath = L"." + fullPath.substr(currentDirStr.length());
+    } else {
+        // Otherwise, just show the full path
+        relativePath = fullPath;
+    }
+    
+    // Get TEMP directory
+    wchar_t tempPath[MAX_PATH] = L"\0";
+    GetTempPathW(MAX_PATH, tempPath);
+    std::wstring tempDir = tempPath;
+    if (!tempDir.empty() && tempDir.back() == L'\\') {
+        tempDir.pop_back(); // Remove trailing slash
+    }
+    
+    // Get Windows directory
+    wchar_t winPath[MAX_PATH] = L"\0";
+    GetWindowsDirectoryW(winPath, MAX_PATH);
+    std::wstring winDir = winPath;
+    
+    // Get System directory
+    wchar_t sysPath[MAX_PATH] = L"\0";
+    GetSystemDirectoryW(sysPath, MAX_PATH);
+    std::wstring sysDir = sysPath;
+    
+    // Get command line
+    std::wstring cmdLine = GetCommandLineW();
+    
+    // Use smaller font for path information
+    float pathStartY = size.height - 280.0f;
+    float pathLineHeight = 25.0f;
+    
+    // Draw all path information with smaller font
+    std::vector<std::pair<std::wstring, std::wstring>> pathItems = {
+        {L"Executable name: ", exeName},
+        {L"Full path: ", fullPath},
+        {L"Executable directory: ", exeDir},
+        {L"Current directory: ", currentDirStr},
+        {L"Command line: ", cmdLine},
+        {L"TEMP directory: ", tempDir},
+        {L"Windows directory: ", winDir},
+        {L"System directory: ", sysDir}
+    };
+    
+    float currentY = pathStartY;
+    for (const auto& item : pathItems) {
+        std::wstring fullLine = item.first + item.second;
+        D2D1_RECT_F rect = D2D1::RectF(kMargin, currentY, size.width - kMargin, currentY + pathLineHeight);
+        d2d_render_target_->DrawText(fullLine.c_str(), static_cast<UINT32>(fullLine.size()),
+                                      small_text_format_.Get(), rect, white_brush.Get());
+        currentY += pathLineHeight;
     }
 
     // Input field and prompt.
