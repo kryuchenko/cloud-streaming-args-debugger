@@ -129,16 +129,7 @@ TEST_F(PathUtilsTest, CalculateRelativePath) {
 // Test OS version detection
 TEST_F(PathUtilsTest, GetOSVersion) {
     // We can't test the exact version, but we can test that the function works
-    typedef LONG NTSTATUS;
-    typedef struct _RTL_OSVERSIONINFOW {
-        DWORD dwOSVersionInfoSize;
-        DWORD dwMajorVersion;
-        DWORD dwMinorVersion;
-        DWORD dwBuildNumber;
-        DWORD dwPlatformId;
-        WCHAR szCSDVersion[128];
-    } RTL_OSVERSIONINFOW, *PRTL_OSVERSIONINFOW;
-    
+    // Note: RTL_OSVERSIONINFOW and NTSTATUS are already defined in Windows SDK
     typedef NTSTATUS (WINAPI *RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
     
     HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
