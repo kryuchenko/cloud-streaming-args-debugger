@@ -19,13 +19,26 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_CURRENT_SOURCE_DIR}/../build/
 # Define test sources
 set(TEST_SOURCES
     cli_args_tests.cpp
+    path_utils_tests.cpp
+    qr_code_tests.cpp
+    audio_tests.cpp
+)
+
+# Add qrcodegen source files from parent directory
+set(QRCODEGEN_SOURCES
+    ../qrcodegen.cpp
 )
 
 # Define test executable as console application (without WIN32 flag)
-add_executable(cli_args_tests ${TEST_SOURCES})
+add_executable(cli_args_tests ${TEST_SOURCES} ${QRCODEGEN_SOURCES})
 
-# Link with GoogleTest
-target_link_libraries(cli_args_tests PRIVATE GTest::gtest GTest::gtest_main)
+# Link with GoogleTest and Windows libraries
+target_link_libraries(cli_args_tests PRIVATE 
+    GTest::gtest 
+    GTest::gtest_main
+    shell32  # For SHGetKnownFolderPath
+    ole32    # For COM functions
+)
 
 # Windows-specific compiler options
 if(MSVC)

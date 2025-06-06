@@ -57,18 +57,8 @@
 #include <propvarutil.h>      // PropVariant helpers
 #pragma comment(lib, "propsys")   // + linker
 
-// Define NTSTATUS if not already defined
-typedef LONG NTSTATUS;
-
-// Define RTL_OSVERSIONINFOW structure for RtlGetVersion
-typedef struct _RTL_OSVERSIONINFOW {
-    DWORD dwOSVersionInfoSize;
-    DWORD dwMajorVersion;
-    DWORD dwMinorVersion;
-    DWORD dwBuildNumber;
-    DWORD dwPlatformId;
-    WCHAR szCSDVersion[128];
-} RTL_OSVERSIONINFOW, *PRTL_OSVERSIONINFOW;
+// NTSTATUS and RTL_OSVERSIONINFOW are already defined in Windows SDK
+// No need to redefine them
 
 // Link with required libraries
 #pragma comment(lib, "d2d1")

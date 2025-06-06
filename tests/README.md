@@ -1,14 +1,59 @@
-# GoogleTest Integration for CLI Arguments Debugger
+# Unit Tests for DirectX Args Debugger
 
-This directory contains tests for the CLI Arguments Debugger project using Google Test framework.
+This directory contains comprehensive unit tests for the DirectX Args Debugger application.
 
-## Building and Running Tests
+## Test Categories
 
-### Using CMake and vcpkg
+1. **cli_args_tests.cpp** - Tests for command line argument formatting and display
+   - Empty arguments handling
+   - Single and multiple arguments
+   - Arguments with spaces and special characters
+   - Unicode argument support
+   - Path formatting with quotes
 
-1. Install vcpkg and integrate it with your system (https://github.com/microsoft/vcpkg)
-2. Build the project with CMake, providing the vcpkg toolchain file:
+2. **path_utils_tests.cpp** - Tests for path and system information utilities
+   - Executable path retrieval
+   - Current directory detection
+   - Windows system directories
+   - AppData and temp paths
+   - Relative path calculation
+   - OS version detection
+   - Wine/Proton detection
 
+3. **qr_code_tests.cpp** - Tests for QR code generation
+   - Basic QR code generation
+   - Data format validation
+   - Unicode data handling
+   - Bitmap scaling
+   - Update frequency logic
+   - FPS synchronization
+
+4. **audio_tests.cpp** - Tests for audio capture functionality
+   - COM initialization
+   - Audio device enumeration
+   - Audio level calculations (16/24/32-bit PCM, float)
+   - Level smoothing algorithm
+   - Stereo visualization
+   - Thread safety with atomics
+   - Event handle operations
+
+## Running Tests Locally
+
+### Using the provided batch file:
+```batch
+run_local_tests.bat
+```
+
+### Manual build and run:
+```batch
+cd build
+cmake ..
+cmake --build . --config Debug --target cli_args_tests
+cd tests
+cli_args_tests.exe
+```
+
+### Using CMake and vcpkg:
 ```bash
 # Configure the build
 cmake -B build -S .. -DCMAKE_TOOLCHAIN_FILE=<path_to_vcpkg>/scripts/buildsystems/vcpkg.cmake
@@ -21,38 +66,22 @@ cd build
 ctest -C Release -V
 ```
 
-### Using Manual Build
+## Requirements
 
-If you prefer to build without CMake, you need to:
-
-1. Install GoogleTest via vcpkg: `vcpkg install gtest`
-2. Build the tests with the correct include and library paths:
-
-```cmd
-cl /EHsc /std:c++20 /permissive- /I.. /I<path_to_vcpkg>/installed/<triplet>/include ^
-   /DUNICODE /D_UNICODE ^
-   ../tests.cpp ^
-   /Fe:../build/tests/cli_args_tests.exe ^
-   /link <path_to_vcpkg>/installed/<triplet>/lib/gtest.lib ^
-         <path_to_vcpkg>/installed/<triplet>/lib/gtest_main.lib
-```
-
-## Test Structure
-
-The test suite validates the command-line argument formatting functions in `cli_args_display.hpp`:
-
-1. `BuildCliHeaderText` - Tests whether the header text is correctly generated based on argument presence
-2. `BuildCliArgsText` - Tests whether arguments are correctly formatted according to Windows conventions:
-   - Arguments without spaces are not quoted
-   - Arguments with spaces are wrapped in double quotes
-   - Arguments are separated by spaces
-   - No trailing space is added
+- Visual Studio 2022
+- CMake 3.10 or higher
+- vcpkg with gtest package installed
+- Windows SDK
 
 ## Adding New Tests
 
 To add new tests, follow the pattern in the existing tests:
 
-1. Create a new TEST_F case with the CliArgsTest fixture
-2. Define a set of input arguments and expected outputs
+1. Create a new TEST_F case with appropriate fixture
+2. Define input data and expected outputs
 3. Call the functions being tested
-4. Use ExpectWideStringEq to compare expected and actual outputs
+4. Use appropriate EXPECT_* macros to validate results
+
+## CI Integration
+
+Tests are automatically run as part of the GitHub Actions CI pipeline on every push and pull request.
