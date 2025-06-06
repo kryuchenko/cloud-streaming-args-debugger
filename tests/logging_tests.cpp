@@ -11,7 +11,7 @@
 // Forward declarations of functions from cli_args_debugger.cpp
 extern void InitLogger();
 extern void Log(const std::wstring& message);
-extern void LogSEH(DWORD exception_code);
+extern void LogSEH(const wchar_t* message);
 
 // Helper function to get the log file path
 std::wstring GetLogFilePath() {
@@ -161,36 +161,36 @@ TEST_F(LoggingTest, LogHandlesUnicodeCharacters) {
 }
 
 TEST_F(LoggingTest, LogSEHWritesExceptionCodes) {
-    // Test common exception codes
-    const std::vector<DWORD> exception_codes = {
-        EXCEPTION_ACCESS_VIOLATION,
-        EXCEPTION_STACK_OVERFLOW,
-        EXCEPTION_INT_DIVIDE_BY_ZERO,
-        0xDEADBEEF  // Custom exception code
+    // Test common exception messages
+    const std::vector<std::wstring> exception_messages = {
+        L"SEH: Access violation in audio thread (0xC0000005)",
+        L"SEH: Stack overflow in audio thread (0xC00000FD)",
+        L"SEH: Exception in audio thread, code=0xC0000094",
+        L"SEH: Exception in audio thread, code=0xDEADBEEF"
     };
     
-    for (DWORD code : exception_codes) {
-        LogSEH(code);
+    for (const auto& msg : exception_messages) {
+        LogSEH(msg.c_str());
     }
     
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     
     auto lines = ReadLastLogLines(20);
     
-    // Check for ACCESS_VIOLATION
+    // Check for access violation message
     bool found_access_violation = false;
     for (const auto& line : lines) {
-        if (line.find(L"ACCESS_VIOLATION") != std::wstring::npos) {
+        if (line.find(L"Access violation") != std::wstring::npos) {
             found_access_violation = true;
             break;
         }
     }
     EXPECT_TRUE(found_access_violation);
     
-    // Check for STACK_OVERFLOW
+    // Check for stack overflow message
     bool found_stack_overflow = false;
     for (const auto& line : lines) {
-        if (line.find(L"STACK_OVERFLOW") != std::wstring::npos) {
+        if (line.find(L"Stack overflow") != std::wstring::npos) {
             found_stack_overflow = true;
             break;
         }
@@ -200,8 +200,7 @@ TEST_F(LoggingTest, LogSEHWritesExceptionCodes) {
     // Check for custom code (should be logged as hex)
     bool found_custom = false;
     for (const auto& line : lines) {
-        if (line.find(L"0xdeadbeef") != std::wstring::npos || 
-            line.find(L"0xDEADBEEF") != std::wstring::npos) {
+        if (line.find(L"0xDEADBEEF") != std::wstring::npos) {
             found_custom = true;
             break;
         }

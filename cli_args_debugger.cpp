@@ -98,9 +98,10 @@ namespace                               // anonymous, internal
     FILE* g_log_file = nullptr;        // File handle for the log file
     std::wstring g_logPath;            // Path to the log file
     CRITICAL_SECTION g_log_cs;         // Critical section for thread safety
+}
 
-    void InitLogger()
-    {
+void InitLogger()
+{
         wchar_t exePath[MAX_PATH] = L"\0";
         GetModuleFileNameW(nullptr, exePath, MAX_PATH);
         g_logPath.assign(exePath);
@@ -122,10 +123,10 @@ namespace                               // anonymous, internal
         
         // Initialize critical section for thread-safe logging
         InitializeCriticalSection(&g_log_cs);
-    }
+}
 
-    void Log(const std::wstring& text)
-    {
+void Log(const std::wstring& text)
+{
         if (!g_log_file) return;
         
         // Lock the critical section before accessing the file
