@@ -168,7 +168,6 @@ void Log(const std::wstring& text)
         
         // Unlock the critical section
         LeaveCriticalSection(&g_log_cs);
-    }
 }
 
 // Simple log function for SEH wrapper to use
