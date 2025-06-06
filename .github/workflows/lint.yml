@@ -15,10 +15,18 @@ jobs:
     - name: Setup MSVC
       uses: microsoft/setup-msbuild@v1
       
+    - name: Setup MSVC Environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+      
     - name: Check C++ Syntax (Windows)
       run: |
+        echo "Checking cli_args_debugger.cpp..."
         cl /EHsc /std:c++20 /permissive- /Zc:__cplusplus /c /W4 /WX cli_args_debugger.cpp
+        echo "Checking seh_wrapper.cpp..."
         cl /EHsc /std:c++20 /permissive- /Zc:__cplusplus /c /W4 /WX seh_wrapper.cpp
+        echo "✅ Windows compilation check passed"
       shell: cmd
 
   macos-validation:
