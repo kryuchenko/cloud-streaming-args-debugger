@@ -7,8 +7,8 @@
 // Include the actual implementation code
 #include "cli_args_display.hpp"
 
-// For running tests outside the main application
-std::string wstring_to_string(const std::wstring &wstr) {
+// For running tests outside the main application (inline to avoid multiple definition)
+inline std::string wstring_to_string(const std::wstring &wstr) {
     if (wstr.empty()) return std::string();
     int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
                                         static_cast<int>(wstr.size()),
