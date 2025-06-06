@@ -19,6 +19,14 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
+        
+    - name: Download QR Code Generator Dependencies
+      run: |
+        echo "Downloading QrCodeGen library..."
+        curl -o qrcodegen.hpp https://raw.githubusercontent.com/nayuki/QR-Code-generator/master/cpp/qrcodegen.hpp
+        curl -o qrcodegen.cpp https://raw.githubusercontent.com/nayuki/QR-Code-generator/master/cpp/qrcodegen.cpp
+        echo "✅ Dependencies downloaded"
+      shell: cmd
       
     - name: Check C++ Syntax (Windows)
       run: |
