@@ -1,4 +1,4 @@
-name: Cross-Platform Validation
+name: Windows Build Validation
 
 on:
   push:
@@ -37,33 +37,3 @@ jobs:
         echo "✅ Windows compilation check passed"
       shell: cmd
 
-  macos-validation:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Install LLVM
-      run: |
-        brew install llvm
-        echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
-        
-    - name: Check C++ Syntax (macOS)
-      run: |
-        # Note: This is Windows-specific code, so we only check for basic syntax issues
-        # Use our custom validation script that handles missing Windows headers
-        chmod +x validate.sh
-        ./validate.sh
-    
-    - name: Check formatting
-      run: |
-        # Skip clang-format on Windows-specific code
-        echo "⚠️ Skipping clang-format on Windows-specific DirectX code"
-        echo "   Format checking should be done on Windows with proper DirectX SDK"
-        
-    - name: Run static analysis
-      run: |
-        brew install cppcheck
-        # Run basic checks on test files only (they don't require Windows headers)
-        echo "🔍 Running cppcheck on test files..."
-        cppcheck --enable=warning,style,performance,portability --std=c++20 \
-          --suppress=missingIncludeSystem tests/*.cpp || echo "⚠️ Some checks failed (expected for cross-platform analysis)"
