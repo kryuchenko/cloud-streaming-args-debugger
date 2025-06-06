@@ -1,0 +1,16 @@
+{
+    "files.associations": {
+        "*.cpp": "cpp",
+        "*.hpp": "cpp"
+    },
+    "C_Cpp.default.cppStandard": "c++20",
+    "C_Cpp.default.compilerPath": "cl.exe",
+    "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
+    "C_Cpp.errorSquiggles": "enabled",
+    "C_Cpp.formatting": "clangFormat",
+    "C_Cpp.clang_format_style": "file",
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": true,
+    "C_Cpp.codeAnalysis.clangTidy.enabled": true,
+    "C_Cpp.codeAnalysis.runAutomatically": true
+}

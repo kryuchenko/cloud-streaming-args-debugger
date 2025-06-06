@@ -1,0 +1,53 @@
+name: Cross-Platform Validation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v1
+      
+    - name: Check C++ Syntax (Windows)
+      run: |
+        cl /EHsc /std:c++20 /permissive- /Zc:__cplusplus /c /W4 /WX cli_args_debugger.cpp
+        cl /EHsc /std:c++20 /permissive- /Zc:__cplusplus /c /W4 /WX seh_wrapper.cpp
+      shell: cmd
+
+  macos-validation:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install LLVM
+      run: |
+        brew install llvm
+        echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
+        
+    - name: Check C++ Syntax (macOS)
+      run: |
+        clang++ -std=c++20 -fsyntax-only -Wall -Wextra -Wpedantic \
+          -DUNICODE -D_UNICODE -I. -Wno-microsoft-extensions \
+          cli_args_debugger.cpp
+        clang++ -std=c++20 -fsyntax-only -Wall -Wextra -Wpedantic \
+          -DUNICODE -D_UNICODE -I. -Wno-microsoft-extensions \
+          seh_wrapper.cpp
+    
+    - name: Check formatting
+      run: |
+        clang-format --dry-run --Werror cli_args_debugger.cpp
+        clang-format --dry-run --Werror seh_wrapper.cpp
+        clang-format --dry-run --Werror tests/*.cpp
+        
+    - name: Run static analysis
+      run: |
+        brew install cppcheck
+        cppcheck --enable=warning,style,performance,portability --std=c++20 \
+          --suppress=missingIncludeSystem *.cpp
