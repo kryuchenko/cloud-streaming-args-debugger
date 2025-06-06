@@ -22,6 +22,11 @@ set(TEST_SOURCES
     path_utils_tests.cpp
     qr_code_tests.cpp
     audio_tests.cpp
+    logging_tests.cpp
+    data_persistence_tests.cpp
+    string_conversion_tests.cpp
+    seh_exception_tests.cpp
+    fps_calculation_tests.cpp
 )
 
 # Add qrcodegen source files from parent directory

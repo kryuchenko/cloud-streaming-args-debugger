@@ -1,0 +1,300 @@
+#include <gtest/gtest.h>
+#include <Windows.h>
+#include <string>
+#include <vector>
+#include <fstream>
+#include <ShlObj.h>
+#include <filesystem>
+#include <thread>
+#include <chrono>
+
+// Forward declarations of functions from cli_args_debugger.cpp
+extern void InitLogger();
+extern void Log(const std::wstring& message);
+extern void LogSEH(DWORD exception_code);
+
+// Helper function to get the log file path
+std::wstring GetLogFilePath() {
+    PWSTR appdata_path = nullptr;
+    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
+    if (FAILED(hr)) {
+        return L"";
+    }
+    
+    std::wstring log_path = appdata_path;
+    CoTaskMemFree(appdata_path);
+    log_path += L"\\ArgumentDebugger\\debug.log";
+    return log_path;
+}
+
+// Helper function to read last N lines from log file
+std::vector<std::wstring> ReadLastLogLines(int n) {
+    std::wstring log_path = GetLogFilePath();
+    std::vector<std::wstring> lines;
+    
+    std::wifstream file(log_path);
+    if (!file.is_open()) {
+        return lines;
+    }
+    
+    std::wstring line;
+    while (std::getline(file, line)) {
+        lines.push_back(line);
+        if (lines.size() > static_cast<size_t>(n)) {
+            lines.erase(lines.begin());
+        }
+    }
+    
+    return lines;
+}
+
+// Helper function to clear the log file
+void ClearLogFile() {
+    std::wstring log_path = GetLogFilePath();
+    if (!log_path.empty()) {
+        // Try to delete the file first
+        DeleteFileW(log_path.c_str());
+        
+        // Ensure the directory exists
+        std::wstring dir_path = log_path.substr(0, log_path.find_last_of(L"\\"));
+        CreateDirectoryW(dir_path.c_str(), nullptr);
+    }
+}
+
+class LoggingTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        // Clear log file before each test
+        ClearLogFile();
+        // Initialize logger
+        InitLogger();
+    }
+    
+    void TearDown() override {
+        // Small delay to ensure file operations complete
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+};
+
+TEST_F(LoggingTest, InitLoggerCreatesLogFile) {
+    // Logger should already be initialized in SetUp
+    std::wstring log_path = GetLogFilePath();
+    EXPECT_FALSE(log_path.empty());
+    
+    // Verify the file exists
+    EXPECT_TRUE(std::filesystem::exists(log_path));
+}
+
+TEST_F(LoggingTest, LogWritesSimpleMessage) {
+    const std::wstring test_message = L"Test log message";
+    Log(test_message);
+    
+    // Give some time for the log to be written
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    auto lines = ReadLastLogLines(10);
+    EXPECT_GT(lines.size(), 0);
+    
+    // Check if any line contains our test message
+    bool found = false;
+    for (const auto& line : lines) {
+        if (line.find(test_message) != std::wstring::npos) {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Log message not found in log file";
+}
+
+TEST_F(LoggingTest, LogWritesMultipleMessages) {
+    const std::vector<std::wstring> test_messages = {
+        L"First message",
+        L"Second message",
+        L"Third message"
+    };
+    
+    for (const auto& msg : test_messages) {
+        Log(msg);
+    }
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    auto lines = ReadLastLogLines(20);
+    
+    // Verify all messages were logged
+    for (const auto& msg : test_messages) {
+        bool found = false;
+        for (const auto& line : lines) {
+            if (line.find(msg) != std::wstring::npos) {
+                found = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found) << "Message not found: " << std::string(msg.begin(), msg.end());
+    }
+}
+
+TEST_F(LoggingTest, LogHandlesEmptyMessage) {
+    Log(L"");
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    // Should not crash and file should still exist
+    EXPECT_TRUE(std::filesystem::exists(GetLogFilePath()));
+}
+
+TEST_F(LoggingTest, LogHandlesUnicodeCharacters) {
+    const std::wstring unicode_message = L"Unicode test: 你好世界 🌍 Привет мир";
+    Log(unicode_message);
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    auto lines = ReadLastLogLines(10);
+    bool found = false;
+    for (const auto& line : lines) {
+        if (line.find(L"Unicode test:") != std::wstring::npos) {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Unicode message not found in log file";
+}
+
+TEST_F(LoggingTest, LogSEHWritesExceptionCodes) {
+    // Test common exception codes
+    const std::vector<DWORD> exception_codes = {
+        EXCEPTION_ACCESS_VIOLATION,
+        EXCEPTION_STACK_OVERFLOW,
+        EXCEPTION_INT_DIVIDE_BY_ZERO,
+        0xDEADBEEF  // Custom exception code
+    };
+    
+    for (DWORD code : exception_codes) {
+        LogSEH(code);
+    }
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    auto lines = ReadLastLogLines(20);
+    
+    // Check for ACCESS_VIOLATION
+    bool found_access_violation = false;
+    for (const auto& line : lines) {
+        if (line.find(L"ACCESS_VIOLATION") != std::wstring::npos) {
+            found_access_violation = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_access_violation);
+    
+    // Check for STACK_OVERFLOW
+    bool found_stack_overflow = false;
+    for (const auto& line : lines) {
+        if (line.find(L"STACK_OVERFLOW") != std::wstring::npos) {
+            found_stack_overflow = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_stack_overflow);
+    
+    // Check for custom code (should be logged as hex)
+    bool found_custom = false;
+    for (const auto& line : lines) {
+        if (line.find(L"0xdeadbeef") != std::wstring::npos || 
+            line.find(L"0xDEADBEEF") != std::wstring::npos) {
+            found_custom = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_custom);
+}
+
+TEST_F(LoggingTest, LogIsThreadSafe) {
+    const int num_threads = 10;
+    const int messages_per_thread = 50;
+    std::vector<std::thread> threads;
+    
+    // Launch multiple threads that write to the log
+    for (int i = 0; i < num_threads; ++i) {
+        threads.emplace_back([i, messages_per_thread]() {
+            for (int j = 0; j < messages_per_thread; ++j) {
+                Log(L"Thread " + std::to_wstring(i) + L" message " + std::to_wstring(j));
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+    }
+    
+    // Wait for all threads to complete
+    for (auto& t : threads) {
+        t.join();
+    }
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    
+    // Verify log file is not corrupted and contains expected messages
+    auto lines = ReadLastLogLines(1000);
+    
+    // We should have many lines (at least some from each thread)
+    EXPECT_GT(lines.size(), 100);
+    
+    // Check that we have messages from different threads
+    int thread_count = 0;
+    for (int i = 0; i < num_threads; ++i) {
+        bool found_thread = false;
+        std::wstring thread_marker = L"Thread " + std::to_wstring(i);
+        for (const auto& line : lines) {
+            if (line.find(thread_marker) != std::wstring::npos) {
+                found_thread = true;
+                break;
+            }
+        }
+        if (found_thread) thread_count++;
+    }
+    
+    // We should have messages from most threads
+    EXPECT_GT(thread_count, num_threads / 2);
+}
+
+TEST_F(LoggingTest, LogHandlesVeryLongMessage) {
+    // Create a very long message
+    std::wstring long_message = L"Long message: ";
+    for (int i = 0; i < 1000; ++i) {
+        long_message += L"A";
+    }
+    
+    Log(long_message);
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    auto lines = ReadLastLogLines(10);
+    bool found = false;
+    for (const auto& line : lines) {
+        if (line.find(L"Long message:") != std::wstring::npos) {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Long message not found in log file";
+}
+
+TEST_F(LoggingTest, MultipleInitLoggerCallsAreSafe) {
+    // Call InitLogger multiple times
+    InitLogger();
+    InitLogger();
+    InitLogger();
+    
+    // Should still be able to log
+    Log(L"After multiple init calls");
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    auto lines = ReadLastLogLines(10);
+    bool found = false;
+    for (const auto& line : lines) {
+        if (line.find(L"After multiple init calls") != std::wstring::npos) {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+}
