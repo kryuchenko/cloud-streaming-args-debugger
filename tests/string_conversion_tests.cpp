@@ -208,7 +208,13 @@ TEST_F(StringConversionTest, StringWithNullCharacter)
     std::string result = wstring_to_string(with_null);
 
     // The function uses size() so it should handle embedded nulls
-    EXPECT_EQ(result.size(), 11); // "Before" + null + "After"
+    // "Before" (6 bytes) + null (1 byte) + "After" (5 bytes) = 12 bytes
+    EXPECT_EQ(result.size(), 12);
+    
+    // Verify the content
+    EXPECT_EQ(result.substr(0, 6), "Before");
+    EXPECT_EQ(result[6], '\0');
+    EXPECT_EQ(result.substr(7, 5), "After");
 }
 
 TEST_F(StringConversionTest, ControlCharacters)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cwctype>
 #include <string>
 #include <vector>
 
@@ -31,8 +33,10 @@ inline std::wstring BuildCliArgsText(const std::vector<std::wstring>& args)
     {
         const auto& arg = args[i];
 
-        // Check if argument is empty, contains spaces or quotes and needs quotes
-        bool needsQuotes = arg.empty() || arg.find(L' ') != std::wstring::npos || arg.find(L'"') != std::wstring::npos;
+        // Check if argument is empty, contains whitespace, or quotes and needs quotes
+        bool needsQuotes = arg.empty() ||
+                           std::any_of(arg.begin(), arg.end(), [](wchar_t ch) { return std::iswspace(ch); }) ||
+                           arg.find(L'"') != std::wstring::npos;
 
         if (needsQuotes)
         {

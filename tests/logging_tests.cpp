@@ -13,9 +13,20 @@ extern void InitLogger();
 extern void Log(const std::wstring& message);
 extern void LogSEH(const wchar_t* message);
 
+// External global variable from cli_args_debugger.cpp
+extern std::wstring g_logPath;
+extern FILE* g_log_file;
+
 // Helper function to get the log file path
 std::wstring GetLogFilePath()
 {
+    // If logger is initialized, use the actual path
+    if (!g_logPath.empty())
+    {
+        return g_logPath;
+    }
+    
+    // Otherwise, try to determine the expected path
     PWSTR appdata_path = nullptr;
     HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
     if (FAILED(hr))
@@ -32,18 +43,44 @@ std::wstring GetLogFilePath()
 // Helper function to read last N lines from log file
 std::vector<std::wstring> ReadLastLogLines(int n)
 {
+    // Ensure all pending writes are flushed before reading
+    if (g_log_file)
+    {
+        fflush(g_log_file);
+    }
+    
     std::wstring log_path = GetLogFilePath();
     std::vector<std::wstring> lines;
 
-    std::wifstream file(log_path);
-    if (!file.is_open())
+    // Open with UTF-16 encoding and shared read access
+    FILE* read_file = _wfsopen(log_path.c_str(), L"r, ccs=UTF-16LE", _SH_DENYNO);
+    if (!read_file)
     {
         return lines;
     }
 
-    std::wstring line;
-    while (std::getline(file, line))
+    // Skip BOM if present
+    wint_t first_char = fgetwc(read_file);
+    if (first_char != 0xFEFF)
     {
+        // Not a BOM, rewind
+        fseek(read_file, 0, SEEK_SET);
+    }
+
+    wchar_t buffer[4096];
+    while (fgetws(buffer, 4096, read_file))
+    {
+        std::wstring line(buffer);
+        // Remove trailing newline
+        if (!line.empty() && line.back() == L'\n')
+        {
+            line.pop_back();
+        }
+        if (!line.empty() && line.back() == L'\r')
+        {
+            line.pop_back();
+        }
+        
         lines.push_back(line);
         if (lines.size() > static_cast<size_t>(n))
         {
@@ -51,6 +88,7 @@ std::vector<std::wstring> ReadLastLogLines(int n)
         }
     }
 
+    fclose(read_file);
     return lines;
 }
 
