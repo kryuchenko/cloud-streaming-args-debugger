@@ -7,18 +7,8 @@
 // Include the actual implementation code
 #include "cli_args_display.hpp"
 
-// For running tests outside the main application (inline to avoid multiple definition)
-inline std::string wstring_to_string(const std::wstring& wstr)
-{
-    if (wstr.empty())
-        return std::string();
-    int size_needed =
-        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
-    std::string strTo(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), &strTo[0], size_needed, nullptr,
-                        nullptr);
-    return strTo;
-}
+// Conversion helper provided by cli_args_debugger.cpp
+extern std::string wstring_to_string(const std::wstring& wstr);
 
 // Test fixture for CLI argument formatting tests
 class CliArgsTest : public ::testing::Test
@@ -160,6 +150,21 @@ TEST_F(CliArgsTest, SingleArgumentWithSpaceNoTrailingSpace)
 
     std::wstring expectedHeader = L"Received the following arguments:";
     std::wstring expectedArgsLine = L"\"single arg with space\"";
+
+    std::wstring actualHeader = BuildCliHeaderText(args);
+    std::wstring actualArgsLine = BuildCliArgsText(args);
+
+    ExpectWideStringEq(expectedHeader, actualHeader);
+    ExpectWideStringEq(expectedArgsLine, actualArgsLine);
+}
+
+// Test for arguments containing tabs or newlines
+TEST_F(CliArgsTest, ArgumentWithWhitespaceCharacters)
+{
+    std::vector<std::wstring> args = {L"tab\tnewline\n", L"arg"};
+
+    std::wstring expectedHeader = L"Received the following arguments:";
+    std::wstring expectedArgsLine = L"\"tab\tnewline\n\" arg";
 
     std::wstring actualHeader = BuildCliHeaderText(args);
     std::wstring actualArgsLine = BuildCliArgsText(args);

@@ -19,7 +19,14 @@ extern "C" DWORD WINAPI RawAudioThreadWithSEH(LPVOID param) noexcept
     DWORD exitCode = 0;
     __try
     {
+        // Check if param is valid
+        if (!param)
+        {
+            return 0xC0000005; // EXCEPTION_ACCESS_VIOLATION
+        }
+        
         // Forward to the real implementation
+        // Note: This expects param to point to an object with AudioCaptureThreadImpl method
         ArgumentDebuggerWindow* self = static_cast<ArgumentDebuggerWindow*>(param);
         exitCode = self->AudioCaptureThreadImpl(param);
     }

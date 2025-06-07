@@ -12,6 +12,7 @@ std::string wstring_to_string(const std::wstring& wstr)
 {
     if (wstr.empty())
         return std::string();
+
     int size_needed =
         WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
     std::string strTo(size_needed, 0);
@@ -160,6 +161,21 @@ TEST_F(CliArgsTest, SingleArgumentWithSpaceNoTrailingSpace)
 
     std::wstring expectedHeader = L"Received the following arguments:";
     std::wstring expectedArgsLine = L"\"single arg with space\"";
+
+    std::wstring actualHeader = BuildCliHeaderText(args);
+    std::wstring actualArgsLine = BuildCliArgsText(args);
+
+    ExpectWideStringEq(expectedHeader, actualHeader);
+    ExpectWideStringEq(expectedArgsLine, actualArgsLine);
+}
+
+// Test for arguments containing tabs or newlines
+TEST_F(CliArgsTest, ArgumentWithWhitespaceCharacters)
+{
+    std::vector<std::wstring> args = {L"tab\tnewline\n", L"arg"};
+
+    std::wstring expectedHeader = L"Received the following arguments:";
+    std::wstring expectedArgsLine = L"\"tab\tnewline\n\" arg";
 
     std::wstring actualHeader = BuildCliHeaderText(args);
     std::wstring actualArgsLine = BuildCliArgsText(args);

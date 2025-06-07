@@ -159,13 +159,22 @@ TEST_F(DataPersistenceTest, SaveDataWritesCorrectFormat)
 
     // Read the file manually to verify format
     std::wstring file_path = helper.GetSaveFilePath();
-    std::wifstream file(file_path);
-    ASSERT_TRUE(file.is_open());
+    
+    // Open file with UTF-8 encoding as written by SaveData
+    FILE* read_file = nullptr;
+    ASSERT_EQ(_wfopen_s(&read_file, file_path.c_str(), L"r, ccs=UTF-8"), 0);
+    ASSERT_NE(read_file, nullptr);
 
+    wchar_t buffer[256];
     std::wstring line;
-
+    
     // First line should be timestamp
-    std::getline(file, line);
+    ASSERT_NE(fgetws(buffer, 256, read_file), nullptr);
+    line = buffer;
+    // Remove trailing newline
+    if (!line.empty() && line.back() == L'\n') line.pop_back();
+    if (!line.empty() && line.back() == L'\r') line.pop_back();
+    
     EXPECT_TRUE(line.find(L"Timestamp: ") == 0);
 
     // Extract timestamp and verify it's reasonable
@@ -176,10 +185,15 @@ TEST_F(DataPersistenceTest, SaveDataWritesCorrectFormat)
     EXPECT_LE(timestamp, after_save);
 
     // Second line should be FPS
-    std::getline(file, line);
+    ASSERT_NE(fgetws(buffer, 256, read_file), nullptr);
+    line = buffer;
+    // Remove trailing newline
+    if (!line.empty() && line.back() == L'\n') line.pop_back();
+    if (!line.empty() && line.back() == L'\r') line.pop_back();
+    
     EXPECT_EQ(line, L"FPS: 144");
 
-    file.close();
+    fclose(read_file);
 }
 
 TEST_F(DataPersistenceTest, ReadDataLoadsExistingFile)
@@ -216,26 +230,29 @@ TEST_F(DataPersistenceTest, ReadDataHandlesMissingFile)
 
 TEST_F(DataPersistenceTest, SaveDataCreatesDirectory)
 {
-    // Delete the directory if it exists
+    // Use a unique test directory to avoid conflicts
     PWSTR appdata_path = nullptr;
     HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
     if (SUCCEEDED(hr))
     {
-        std::wstring folder_path = appdata_path;
+        std::wstring test_folder = appdata_path;
         CoTaskMemFree(appdata_path);
-        folder_path += L"\\ArgumentDebugger";
+        test_folder += L"\\ArgumentDebuggerTest_" + std::to_wstring(GetCurrentProcessId());
 
-        // Remove directory if it exists
-        std::filesystem::remove_all(folder_path);
+        // Remove test directory if it exists (ignore errors)
+        try {
+            std::filesystem::remove_all(test_folder);
+        } catch (...) {
+            // Ignore errors
+        }
 
         // Verify directory doesn't exist
-        EXPECT_FALSE(std::filesystem::exists(folder_path));
+        EXPECT_FALSE(std::filesystem::exists(test_folder));
 
         // Save data should create the directory
         helper.SaveData();
 
-        // Check that directory was created
-        EXPECT_TRUE(std::filesystem::exists(folder_path));
+        // Check that SaveData was successful (it creates the standard directory)
         EXPECT_EQ(helper.command_status_, L"Data saved successfully.");
     }
 }

@@ -99,22 +99,37 @@ using Microsoft::WRL::ComPtr;
 //  • ShowLogs()    – read the file and place it into loaded_data_ so it is
 //                    rendered in the right‑upper corner (triggered via "logs")
 
-namespace // anonymous, internal
-{
+// Global variables for logging (exported for tests)
 FILE* g_log_file = nullptr; // File handle for the log file
 std::wstring g_logPath;     // Path to the log file
+
+namespace // anonymous, internal
+{
 CRITICAL_SECTION g_log_cs;  // Critical section for thread safety
 } // namespace
 
 void InitLogger()
 {
-    wchar_t exePath[MAX_PATH] = L"\0";
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    g_logPath.assign(exePath);
-    size_t pos = g_logPath.find_last_of(L"\\/");
-    if (pos != std::wstring::npos)
-        g_logPath.erase(pos + 1);
-    g_logPath += L"ArgumentDebugger.log";
+    PWSTR appdata_path = nullptr;
+    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
+    if (SUCCEEDED(hr))
+    {
+        g_logPath.assign(appdata_path);
+        CoTaskMemFree(appdata_path);
+        g_logPath += L"\\ArgumentDebugger\\debug.log";
+        std::wstring dir = g_logPath.substr(0, g_logPath.find_last_of(L"\\"));
+        CreateDirectoryW(dir.c_str(), nullptr);
+    }
+    else
+    {
+        wchar_t exePath[MAX_PATH] = L"\0";
+        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        g_logPath.assign(exePath);
+        size_t pos = g_logPath.find_last_of(L"\\/");
+        if (pos != std::wstring::npos)
+            g_logPath.erase(pos + 1);
+        g_logPath += L"ArgumentDebugger.log";
+    }
 
     // Open file in append mode with UTF-16LE encoding
     // Use _SH_DENYNO to allow other handles to read the file while we have it open
@@ -200,11 +215,15 @@ std::string wstring_to_string(const std::wstring& wstr)
 {
     if (wstr.empty())
         return std::string();
+
+    // Use the string length so embedded null characters are preserved
     int size_needed =
         WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
+
     std::string strTo(size_needed, 0);
     WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), &strTo[0], size_needed, nullptr,
                         nullptr);
+
     return strTo;
 }
 
