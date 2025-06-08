@@ -328,6 +328,7 @@ class ArgumentDebuggerWindow
     // New variables for displaying command status and loaded data:
     std::wstring command_status_;
     std::wstring loaded_data_;
+    std::wstring loaded_data_title_; // Title for the loaded data section
     bool show_paths_ = false; // Flag to control file paths display
     bool show_logs_ = false; // Flag to control logs display
     
@@ -349,6 +350,7 @@ class ArgumentDebuggerWindow
     ComPtr<IDWriteFactory> dwrite_factory_;
     ComPtr<IDWriteTextFormat> text_format_;
     ComPtr<IDWriteTextFormat> small_text_format_; // Smaller font for logs
+    ComPtr<IDWriteTextFormat> data_text_format_; // Medium font for loaded data
     
     // D2D Brushes - created once and reused
     ComPtr<ID2D1SolidColorBrush> white_brush_;
@@ -551,6 +553,11 @@ void ArgumentDebuggerWindow::OnCharInput(wchar_t ch)
         {
             Log(L"Command: read");
             ReadData();
+            if (!loaded_data_.empty())
+            {
+                loaded_data_title_ = L"Save File Contents:";
+                show_logs_ = true; // Show the data when read succeeds
+            }
         }
         else if (_wcsicmp(user_input_.c_str(), L"logs") == 0)
         {
@@ -559,11 +566,13 @@ void ArgumentDebuggerWindow::OnCharInput(wchar_t ch)
             if (show_logs_)
             {
                 ShowLogs();
+                loaded_data_title_ = L"Log File Contents:";
                 command_status_ = L"Logs enabled.";
             }
             else
             {
                 loaded_data_.clear();
+                loaded_data_title_.clear();
                 command_status_ = L"Logs disabled.";
             }
         }
@@ -751,6 +760,17 @@ void ArgumentDebuggerWindow::CreateD2DResources()
     small_text_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
     // Use trailing alignment for device name text to align to the right
     small_text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+    
+    // Create a medium text format for loaded data (double the size of small font)
+    DX_CALL(dwrite_factory_->CreateTextFormat(L"Consolas", nullptr, // Using monospaced font for data
+                                              DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                                              DWRITE_FONT_STRETCH_NORMAL,
+                                              24.0f, // Double the size of small_text_format_
+                                              L"en-us", data_text_format_.GetAddressOf()),
+            "Failed to create data text format.");
+    data_text_format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    data_text_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+    data_text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
     
     // Create brushes once during initialization
     DX_CALL(d2d_render_target_->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), white_brush_.GetAddressOf()),
@@ -1015,11 +1035,15 @@ void ArgumentDebuggerWindow::RenderFrame()
         // Added padding at the bottom (reduced height by 20px)
         D2D1_RECT_F data_rect = D2D1::RectF(size.width - 750.0f, kMargin, size.width - kMargin, kMargin + 380.0f);
         d2d_render_target_->DrawText(loaded_data_.c_str(), static_cast<UINT32>(loaded_data_.size()),
-                                     small_text_format_.Get(), data_rect, green_brush_.Get());
+                                     data_text_format_.Get(), data_rect, green_brush_.Get());
 
-        // Add a title for the logs section
-        D2D1_RECT_F title_rect = D2D1::RectF(size.width - 750.0f, kMargin - 30.0f, size.width - kMargin, kMargin);
-        d2d_render_target_->DrawText(L"Log File Contents:", 17, text_format_.Get(), title_rect, yellow_brush_.Get());
+        // Add a title for the loaded data section
+        if (!loaded_data_title_.empty())
+        {
+            D2D1_RECT_F title_rect = D2D1::RectF(size.width - 750.0f, kMargin - 30.0f, size.width - kMargin, kMargin);
+            d2d_render_target_->DrawText(loaded_data_title_.c_str(), static_cast<UINT32>(loaded_data_title_.size()), 
+                                         text_format_.Get(), title_rect, yellow_brush_.Get());
+        }
     }
 
     // Display file paths only if enabled and cached data is available
@@ -1155,10 +1179,11 @@ void ArgumentDebuggerWindow::RenderFrame()
     {
         // Device lost, resources need to be recreated
         Log(L"Device lost detected, recreating D2D resources");
-        // Reset brushes before recreating
+        // Reset brushes and text formats before recreating
         white_brush_.Reset();
         green_brush_.Reset();
         yellow_brush_.Reset();
+        data_text_format_.Reset();
         CreateD2DResources();
         return;
     }
@@ -1619,6 +1644,7 @@ void ArgumentDebuggerWindow::Cleanup()
     d3d_device_.Reset();
     text_format_.Reset();
     small_text_format_.Reset(); // Release the small text format
+    data_text_format_.Reset(); // Release the data text format
     dwrite_factory_.Reset();
     d2d_render_target_.Reset();
     d2d_factory_.Reset();
