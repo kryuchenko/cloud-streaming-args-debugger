@@ -1098,112 +1098,112 @@ void ArgumentDebuggerWindow::RenderFrame()
                         MultiByteToWideChar(CP_UTF8, 0, version, -1, &wversion[0], size_needed);
                         wineVersion = L"Wine " + wversion;
 
-                    // Check multiple Proton-related environment variables
-                    wchar_t envBuf[1024] = {0};
+                        // Check multiple Proton-related environment variables
+                        wchar_t envBuf[1024] = {0};
 
-                    // Try different Proton environment variables
-                    if (GetEnvironmentVariableW(L"PROTON_VERSION", envBuf, 1024) > 0)
-                    {
-                        wineVersion = L"Proton " + std::wstring(envBuf) + L" (Wine " + wversion + L")";
-                    }
-                    else if (GetEnvironmentVariableW(L"SteamGameId", envBuf, 1024) > 0)
-                    {
-                        // If running through Steam
-                        std::wstring steamInfo = L"Steam Game ID: " + std::wstring(envBuf);
-
-                        // Check for STEAM_COMPAT_DATA_PATH which Proton sets
-                        if (GetEnvironmentVariableW(L"STEAM_COMPAT_DATA_PATH", envBuf, 1024) > 0)
+                        // Try different Proton environment variables
+                        if (GetEnvironmentVariableW(L"PROTON_VERSION", envBuf, 1024) > 0)
                         {
-                            wineVersion = L"Proton (via Steam) - Wine " + wversion;
+                            wineVersion = L"Proton " + std::wstring(envBuf) + L" (Wine " + wversion + L")";
+                        }
+                        else if (GetEnvironmentVariableW(L"SteamGameId", envBuf, 1024) > 0)
+                        {
+                            // If running through Steam
+                            std::wstring steamInfo = L"Steam Game ID: " + std::wstring(envBuf);
 
-                            // Try to extract Proton version from path
-                            std::wstring compatPath = envBuf;
-                            size_t protonPos = compatPath.find(L"Proton");
-                            if (protonPos != std::wstring::npos)
+                            // Check for STEAM_COMPAT_DATA_PATH which Proton sets
+                            if (GetEnvironmentVariableW(L"STEAM_COMPAT_DATA_PATH", envBuf, 1024) > 0)
                             {
-                                size_t endPos = compatPath.find(L"\\", protonPos);
-                                if (endPos != std::wstring::npos)
+                                wineVersion = L"Proton (via Steam) - Wine " + wversion;
+
+                                // Try to extract Proton version from path
+                                std::wstring compatPath = envBuf;
+                                size_t protonPos = compatPath.find(L"Proton");
+                                if (protonPos != std::wstring::npos)
                                 {
-                                    std::wstring protonDir = compatPath.substr(protonPos, endPos - protonPos);
-                                    wineVersion = protonDir + L" (Wine " + wversion + L")";
+                                    size_t endPos = compatPath.find(L"\\", protonPos);
+                                    if (endPos != std::wstring::npos)
+                                    {
+                                        std::wstring protonDir = compatPath.substr(protonPos, endPos - protonPos);
+                                        wineVersion = protonDir + L" (Wine " + wversion + L")";
+                                    }
+                                }
+                            }
+                            wineVersion += L" - " + steamInfo;
+                        }
+
+                        // Check for Lutris
+                        else if (GetEnvironmentVariableW(L"LUTRIS_GAME_UUID", envBuf, 1024) > 0)
+                        {
+                            wineVersion = L"Wine " + wversion + L" (via Lutris)";
+                        }
+
+                        // Check for Bottles
+                        else if (GetEnvironmentVariableW(L"BOTTLE_NAME", envBuf, 1024) > 0)
+                        {
+                            wineVersion = L"Wine " + wversion + L" (Bottle: " + std::wstring(envBuf) + L")";
+                        }
+
+                        // Try to read from /proc/self/exe link if available (Linux compatibility layer info)
+                        FILE* cmdlineFile = fopen("/proc/self/cmdline", "r");
+                        if (cmdlineFile)
+                        {
+                            char cmdlineBuf[4096] = {0};
+                            size_t bytesRead = fread(cmdlineBuf, 1, sizeof(cmdlineBuf) - 1, cmdlineFile);
+                            fclose(cmdlineFile);
+
+                            if (bytesRead > 0)
+                            {
+                                std::string cmdlineStr(cmdlineBuf);
+                                if (cmdlineStr.find("proton") != std::string::npos ||
+                                    cmdlineStr.find("Proton") != std::string::npos)
+                                {
+                                    wineVersion += L" [Proton detected in cmdline]";
                                 }
                             }
                         }
-                        wineVersion += L" - " + steamInfo;
-                    }
 
-                    // Check for Lutris
-                    else if (GetEnvironmentVariableW(L"LUTRIS_GAME_UUID", envBuf, 1024) > 0)
-                    {
-                        wineVersion = L"Wine " + wversion + L" (via Lutris)";
-                    }
+                        // Additional Proton environment variables to check
+                        std::vector<std::wstring> protonEnvVars = {L"STEAM_COMPAT_CLIENT_INSTALL_PATH",
+                                                                   L"STEAM_COMPAT_TOOL_PATHS",
+                                                                   L"PROTON_NO_ESYNC",
+                                                                   L"PROTON_NO_FSYNC",
+                                                                   L"PROTON_USE_WINED3D",
+                                                                   L"PROTON_LOG",
+                                                                   L"WINE_FULLSCREEN_FSR",
+                                                                   L"DXVK_CONFIG_FILE",
+                                                                   L"VKD3D_CONFIG",
+                                                                   L"PROTON_HIDE_NVIDIA_GPU"};
 
-                    // Check for Bottles
-                    else if (GetEnvironmentVariableW(L"BOTTLE_NAME", envBuf, 1024) > 0)
-                    {
-                        wineVersion = L"Wine " + wversion + L" (Bottle: " + std::wstring(envBuf) + L")";
-                    }
-
-                    // Try to read from /proc/self/exe link if available (Linux compatibility layer info)
-                    FILE* cmdlineFile = fopen("/proc/self/cmdline", "r");
-                    if (cmdlineFile)
-                    {
-                        char cmdlineBuf[4096] = {0};
-                        size_t bytesRead = fread(cmdlineBuf, 1, sizeof(cmdlineBuf) - 1, cmdlineFile);
-                        fclose(cmdlineFile);
-
-                        if (bytesRead > 0)
+                        std::wstring protonHints;
+                        for (const auto& envVar : protonEnvVars)
                         {
-                            std::string cmdlineStr(cmdlineBuf);
-                            if (cmdlineStr.find("proton") != std::string::npos ||
-                                cmdlineStr.find("Proton") != std::string::npos)
+                            if (GetEnvironmentVariableW(envVar.c_str(), envBuf, 1024) > 0)
                             {
-                                wineVersion += L" [Proton detected in cmdline]";
+                                if (!protonHints.empty())
+                                    protonHints += L", ";
+                                protonHints += envVar;
                             }
                         }
-                    }
 
-                    // Additional Proton environment variables to check
-                    std::vector<std::wstring> protonEnvVars = {L"STEAM_COMPAT_CLIENT_INSTALL_PATH",
-                                                               L"STEAM_COMPAT_TOOL_PATHS",
-                                                               L"PROTON_NO_ESYNC",
-                                                               L"PROTON_NO_FSYNC",
-                                                               L"PROTON_USE_WINED3D",
-                                                               L"PROTON_LOG",
-                                                               L"WINE_FULLSCREEN_FSR",
-                                                               L"DXVK_CONFIG_FILE",
-                                                               L"VKD3D_CONFIG",
-                                                               L"PROTON_HIDE_NVIDIA_GPU"};
-
-                    std::wstring protonHints;
-                    for (const auto& envVar : protonEnvVars)
-                    {
-                        if (GetEnvironmentVariableW(envVar.c_str(), envBuf, 1024) > 0)
+                        if (!protonHints.empty() && wineVersion.find(L"Proton") == std::wstring::npos)
                         {
-                            if (!protonHints.empty())
-                                protonHints += L", ";
-                            protonHints += envVar;
+                            wineVersion += L" [Proton env vars: " + protonHints + L"]";
                         }
-                    }
 
-                    if (!protonHints.empty() && wineVersion.find(L"Proton") == std::wstring::npos)
-                    {
-                        wineVersion += L" [Proton env vars: " + protonHints + L"]";
-                    }
-
-                    // Try to get Proton version from WINEPREFIX path
-                    if (GetEnvironmentVariableW(L"WINEPREFIX", envBuf, 1024) > 0)
-                    {
-                        std::wstring prefix = envBuf;
-                        if (prefix.find(L"steamapps") != std::wstring::npos &&
-                            prefix.find(L"compatdata") != std::wstring::npos)
+                        // Try to get Proton version from WINEPREFIX path
+                        if (GetEnvironmentVariableW(L"WINEPREFIX", envBuf, 1024) > 0)
                         {
-                            if (wineVersion.find(L"Proton") == std::wstring::npos)
+                            std::wstring prefix = envBuf;
+                            if (prefix.find(L"steamapps") != std::wstring::npos &&
+                                prefix.find(L"compatdata") != std::wstring::npos)
                             {
-                                wineVersion = L"Proton (detected via prefix) - " + wineVersion;
+                                if (wineVersion.find(L"Proton") == std::wstring::npos)
+                                {
+                                    wineVersion = L"Proton (detected via prefix) - " + wineVersion;
+                                }
                             }
                         }
-                    }
                 }
             }
         }
