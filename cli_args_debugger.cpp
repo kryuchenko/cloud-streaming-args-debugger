@@ -314,6 +314,9 @@ class ArgumentDebuggerWindow
 
     // Helper to load entire log file into loaded_data_
     void ShowLogs();
+    
+    // Helper to calculate and cache path information once
+    void CalculatePathInfo();
 
     HWND window_handle_ = nullptr;
     bool is_running_ = true;
@@ -326,6 +329,9 @@ class ArgumentDebuggerWindow
     std::wstring command_status_;
     std::wstring loaded_data_;
     bool show_paths_ = false; // Flag to control file paths display
+    
+    // Cached path information to avoid expensive system calls every frame
+    std::vector<std::pair<std::wstring, std::wstring>> cached_path_items_;
 
     // Variables for FPS and QR code
     float current_fps_ = 0.0f;
@@ -554,7 +560,18 @@ void ArgumentDebuggerWindow::OnCharInput(wchar_t ch)
         {
             Log(L"Command: path");
             show_paths_ = !show_paths_;
-            command_status_ = show_paths_ ? L"File paths enabled." : L"File paths disabled.";
+            if (show_paths_)
+            {
+                // Calculate path information once when enabling
+                CalculatePathInfo();
+                command_status_ = L"File paths enabled.";
+            }
+            else
+            {
+                // Clear cached data when disabling
+                cached_path_items_.clear();
+                command_status_ = L"File paths disabled.";
+            }
         }
         else
         {
@@ -994,232 +1011,9 @@ void ArgumentDebuggerWindow::RenderFrame()
         d2d_render_target_->DrawText(L"Log File Contents:", 17, text_format_.Get(), title_rect, yellow_brush_.Get());
     }
 
-    // Display file paths only if enabled
-    if (show_paths_)
+    // Display file paths only if enabled and cached data is available
+    if (show_paths_ && !cached_path_items_.empty())
     {
-        // Display full and relative path where the application is running
-        wchar_t exePath[MAX_PATH] = L"\0";
-        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-        std::wstring fullPath = exePath;
-
-        // Get current working directory for relative path
-        wchar_t currentDir[MAX_PATH] = L"\0";
-        GetCurrentDirectoryW(MAX_PATH, currentDir);
-        std::wstring currentDirStr = currentDir;
-
-        // Extract just the executable name
-        std::wstring exeName = fullPath;
-        size_t lastSlash = exeName.find_last_of(L"\\");
-        if (lastSlash != std::wstring::npos)
-        {
-            exeName = exeName.substr(lastSlash + 1);
-        }
-
-        // Extract directory from full path
-        std::wstring exeDir = fullPath;
-        if (lastSlash != std::wstring::npos)
-        {
-            exeDir = exeDir.substr(0, lastSlash);
-        }
-
-        // Calculate relative path
-        std::wstring relativePath;
-        if (fullPath.find(currentDirStr) == 0)
-        {
-            // If the exe is within the current directory, show relative path
-            relativePath = L"." + fullPath.substr(currentDirStr.length());
-        }
-        else
-        {
-            // Otherwise, just show the full path
-            relativePath = fullPath;
-        }
-
-        // Get TEMP directory
-        wchar_t tempPath[MAX_PATH] = L"\0";
-        GetTempPathW(MAX_PATH, tempPath);
-        std::wstring tempDir = tempPath;
-        if (!tempDir.empty() && tempDir.back() == L'\\')
-        {
-            tempDir.pop_back(); // Remove trailing slash
-        }
-
-        // Get Windows directory
-        wchar_t winPath[MAX_PATH] = L"\0";
-        GetWindowsDirectoryW(winPath, MAX_PATH);
-        std::wstring winDir = winPath;
-
-        // Get System directory
-        wchar_t sysPath[MAX_PATH] = L"\0";
-        GetSystemDirectoryW(sysPath, MAX_PATH);
-        std::wstring sysDir = sysPath;
-
-        // Get command line
-        std::wstring cmdLine = GetCommandLineW();
-
-        // Get OS version
-        std::wstring osVersion = L"Unknown";
-        typedef NTSTATUS(WINAPI * RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
-        HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
-        if (hNtdll)
-        {
-            RtlGetVersionPtr RtlGetVersion = (RtlGetVersionPtr)GetProcAddress(hNtdll, "RtlGetVersion");
-            if (RtlGetVersion)
-            {
-                RTL_OSVERSIONINFOW osvi = {0};
-                osvi.dwOSVersionInfoSize = sizeof(osvi);
-                if (RtlGetVersion(&osvi) == 0)
-                {
-                    osVersion = L"Windows " + std::to_wstring(osvi.dwMajorVersion) + L"." +
-                                std::to_wstring(osvi.dwMinorVersion) + L" (Build " + std::to_wstring(osvi.dwBuildNumber) +
-                                L")";
-                }
-            }
-        }
-
-        // Check for Wine/Proton
-        std::wstring wineVersion = L"Not detected";
-        HMODULE hNtdllCheck = GetModuleHandleW(L"ntdll.dll");
-        if (hNtdllCheck)
-        {
-            if (GetProcAddress(hNtdllCheck, "wine_get_version"))
-            {
-                typedef const char* (*wine_get_version_func)(void);
-                wine_get_version_func wine_get_version =
-                    (wine_get_version_func)GetProcAddress(hNtdllCheck, "wine_get_version");
-                if (wine_get_version)
-                {
-                    const char* version = wine_get_version();
-                    if (version)
-                    {
-                        // Convert char* to wstring
-                        int size_needed = MultiByteToWideChar(CP_UTF8, 0, version, -1, NULL, 0);
-                        std::wstring wversion(size_needed - 1, 0);
-                        MultiByteToWideChar(CP_UTF8, 0, version, -1, &wversion[0], size_needed);
-                        wineVersion = L"Wine " + wversion;
-
-                        // Check multiple Proton-related environment variables
-                        wchar_t envBuf[1024] = {0};
-
-                        // Try different Proton environment variables
-                        if (GetEnvironmentVariableW(L"PROTON_VERSION", envBuf, 1024) > 0)
-                        {
-                            wineVersion = L"Proton " + std::wstring(envBuf) + L" (Wine " + wversion + L")";
-                        }
-                        else if (GetEnvironmentVariableW(L"SteamGameId", envBuf, 1024) > 0)
-                        {
-                            // If running through Steam
-                            std::wstring steamInfo = L"Steam Game ID: " + std::wstring(envBuf);
-
-                            // Check for STEAM_COMPAT_DATA_PATH which Proton sets
-                            if (GetEnvironmentVariableW(L"STEAM_COMPAT_DATA_PATH", envBuf, 1024) > 0)
-                            {
-                                wineVersion = L"Proton (via Steam) - Wine " + wversion;
-
-                                // Try to extract Proton version from path
-                                std::wstring compatPath = envBuf;
-                                size_t protonPos = compatPath.find(L"Proton");
-                                if (protonPos != std::wstring::npos)
-                                {
-                                    size_t endPos = compatPath.find(L"\\", protonPos);
-                                    if (endPos != std::wstring::npos)
-                                    {
-                                        std::wstring protonDir = compatPath.substr(protonPos, endPos - protonPos);
-                                        wineVersion = protonDir + L" (Wine " + wversion + L")";
-                                    }
-                                }
-                            }
-                            wineVersion += L" - " + steamInfo;
-                        }
-
-                        // Check for Lutris
-                        else if (GetEnvironmentVariableW(L"LUTRIS_GAME_UUID", envBuf, 1024) > 0)
-                        {
-                            wineVersion = L"Wine " + wversion + L" (via Lutris)";
-                        }
-
-                        // Check for Bottles
-                        else if (GetEnvironmentVariableW(L"BOTTLE_NAME", envBuf, 1024) > 0)
-                        {
-                            wineVersion = L"Wine " + wversion + L" (Bottle: " + std::wstring(envBuf) + L")";
-                        }
-
-                        // Try to read from /proc/self/exe link if available (Linux compatibility layer info)
-                        FILE* cmdlineFile = fopen("/proc/self/cmdline", "r");
-                        if (cmdlineFile)
-                        {
-                            char cmdlineBuf[4096] = {0};
-                            size_t bytesRead = fread(cmdlineBuf, 1, sizeof(cmdlineBuf) - 1, cmdlineFile);
-                            fclose(cmdlineFile);
-
-                            if (bytesRead > 0)
-                            {
-                                std::string cmdlineStr(cmdlineBuf);
-                                if (cmdlineStr.find("proton") != std::string::npos ||
-                                    cmdlineStr.find("Proton") != std::string::npos)
-                                {
-                                    wineVersion += L" [Proton detected in cmdline]";
-                                }
-                            }
-                        }
-
-                        // Additional Proton environment variables to check
-                        std::vector<std::wstring> protonEnvVars = {L"STEAM_COMPAT_CLIENT_INSTALL_PATH",
-                                                                   L"STEAM_COMPAT_TOOL_PATHS",
-                                                                   L"PROTON_NO_ESYNC",
-                                                                   L"PROTON_NO_FSYNC",
-                                                                   L"PROTON_USE_WINED3D",
-                                                                   L"PROTON_LOG",
-                                                                   L"WINE_FULLSCREEN_FSR",
-                                                                   L"DXVK_CONFIG_FILE",
-                                                                   L"VKD3D_CONFIG",
-                                                                   L"PROTON_HIDE_NVIDIA_GPU"};
-
-                        std::wstring protonHints;
-                        for (const auto& envVar : protonEnvVars)
-                        {
-                            if (GetEnvironmentVariableW(envVar.c_str(), envBuf, 1024) > 0)
-                            {
-                                if (!protonHints.empty())
-                                    protonHints += L", ";
-                                protonHints += envVar;
-                            }
-                        }
-
-                        if (!protonHints.empty() && wineVersion.find(L"Proton") == std::wstring::npos)
-                        {
-                            wineVersion += L" [Proton env vars: " + protonHints + L"]";
-                        }
-
-                        // Try to get Proton version from WINEPREFIX path
-                        if (GetEnvironmentVariableW(L"WINEPREFIX", envBuf, 1024) > 0)
-                        {
-                            std::wstring prefix = envBuf;
-                            if (prefix.find(L"steamapps") != std::wstring::npos &&
-                                prefix.find(L"compatdata") != std::wstring::npos)
-                            {
-                                if (wineVersion.find(L"Proton") == std::wstring::npos)
-                                {
-                                    wineVersion = L"Proton (detected via prefix) - " + wineVersion;
-                                }
-                            }
-                        }
-                }
-            }
-        }
-    }
-
-        // Get save path
-        std::wstring savePath = L"Not available";
-        PWSTR appdata_path = nullptr;
-        HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
-        if (SUCCEEDED(hr))
-        {
-            savePath = appdata_path;
-            CoTaskMemFree(appdata_path);
-            savePath += L"\\ArgumentDebugger\\saved_data.txt";
-        }
-
         // Use smaller font for path information
         // Position at the right edge, aligned with mic indicators
         float pathWidth = 400.0f;  // Width of the path info block
@@ -1228,15 +1022,9 @@ void ArgumentDebuggerWindow::RenderFrame()
         float pathStartY = size.height * 0.3f; // Move up a bit to fit more items
         float pathLineHeight = 25.0f;
 
-        // Draw all path information with smaller font
-        std::vector<std::pair<std::wstring, std::wstring>> pathItems = {
-            {L"OS Version: ", osVersion},     {L"Wine/Proton: ", wineVersion},     {L"Executable name: ", exeName},
-            {L"Full path: ", fullPath},       {L"Executable directory: ", exeDir}, {L"Current directory: ", currentDirStr},
-            {L"Command line: ", cmdLine},     {L"Save file path: ", savePath},     {L"TEMP directory: ", tempDir},
-            {L"Windows directory: ", winDir}, {L"System directory: ", sysDir}};
-
+        // Draw cached path information with smaller font
         float currentY = pathStartY;
-        for (const auto& item : pathItems)
+        for (const auto& item : cached_path_items_)
         {
             std::wstring fullLine = item.first + item.second;
             D2D1_RECT_F rect = D2D1::RectF(pathStartX, currentY, pathEndX, currentY + pathLineHeight);
@@ -1974,6 +1762,133 @@ void ArgumentDebuggerWindow::ReadData()
         command_status_ = L"Error retrieving AppData path.";
         Log(L"ReadData: Error retrieving AppData path, hr = " + std::to_wstring(hr));
     }
+}
+
+// Helper method to calculate and cache path information once
+void ArgumentDebuggerWindow::CalculatePathInfo()
+{
+    cached_path_items_.clear();
+    
+    // Display full and relative path where the application is running
+    wchar_t exePath[MAX_PATH] = L"\0";
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring fullPath = exePath;
+
+    // Get current working directory for relative path
+    wchar_t currentDir[MAX_PATH] = L"\0";
+    GetCurrentDirectoryW(MAX_PATH, currentDir);
+    std::wstring currentDirStr = currentDir;
+
+    // Extract just the executable name
+    std::wstring exeName = fullPath;
+    size_t lastSlash = exeName.find_last_of(L"\\");
+    if (lastSlash != std::wstring::npos)
+    {
+        exeName = exeName.substr(lastSlash + 1);
+    }
+
+    // Extract directory from full path
+    std::wstring exeDir = fullPath;
+    if (lastSlash != std::wstring::npos)
+    {
+        exeDir = exeDir.substr(0, lastSlash);
+    }
+
+    // Get TEMP directory
+    wchar_t tempPath[MAX_PATH] = L"\0";
+    GetTempPathW(MAX_PATH, tempPath);
+    std::wstring tempDir = tempPath;
+    if (!tempDir.empty() && tempDir.back() == L'\\')
+    {
+        tempDir.pop_back(); // Remove trailing slash
+    }
+
+    // Get Windows directory
+    wchar_t winPath[MAX_PATH] = L"\0";
+    GetWindowsDirectoryW(winPath, MAX_PATH);
+    std::wstring winDir = winPath;
+
+    // Get System directory
+    wchar_t sysPath[MAX_PATH] = L"\0";
+    GetSystemDirectoryW(sysPath, MAX_PATH);
+    std::wstring sysDir = sysPath;
+
+    // Get command line
+    std::wstring cmdLine = GetCommandLineW();
+
+    // Get OS version
+    std::wstring osVersion = L"Unknown";
+    typedef NTSTATUS(WINAPI * RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
+    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+    if (hNtdll)
+    {
+        RtlGetVersionPtr RtlGetVersion = (RtlGetVersionPtr)GetProcAddress(hNtdll, "RtlGetVersion");
+        if (RtlGetVersion)
+        {
+            RTL_OSVERSIONINFOW osvi = {0};
+            osvi.dwOSVersionInfoSize = sizeof(osvi);
+            if (RtlGetVersion(&osvi) == 0)
+            {
+                osVersion = L"Windows " + std::to_wstring(osvi.dwMajorVersion) + L"." +
+                            std::to_wstring(osvi.dwMinorVersion) + L" (Build " + std::to_wstring(osvi.dwBuildNumber) +
+                            L")";
+            }
+        }
+    }
+
+    // Check for Wine/Proton (simplified version)
+    std::wstring wineVersion = L"Not detected";
+    HMODULE hNtdllCheck = GetModuleHandleW(L"ntdll.dll");
+    if (hNtdllCheck && GetProcAddress(hNtdllCheck, "wine_get_version"))
+    {
+        typedef const char* (*wine_get_version_func)(void);
+        wine_get_version_func wine_get_version =
+            (wine_get_version_func)GetProcAddress(hNtdllCheck, "wine_get_version");
+        if (wine_get_version)
+        {
+            const char* version = wine_get_version();
+            if (version)
+            {
+                int size_needed = MultiByteToWideChar(CP_UTF8, 0, version, -1, NULL, 0);
+                std::wstring wversion(size_needed - 1, 0);
+                MultiByteToWideChar(CP_UTF8, 0, version, -1, &wversion[0], size_needed);
+                wineVersion = L"Wine " + wversion;
+                
+                // Quick Proton check
+                wchar_t envBuf[1024] = {0};
+                if (GetEnvironmentVariableW(L"PROTON_VERSION", envBuf, 1024) > 0)
+                {
+                    wineVersion = L"Proton " + std::wstring(envBuf) + L" (Wine " + wversion + L")";
+                }
+            }
+        }
+    }
+
+    // Get save path
+    std::wstring savePath = L"Not available";
+    PWSTR appdata_path = nullptr;
+    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
+    if (SUCCEEDED(hr))
+    {
+        savePath = appdata_path;
+        CoTaskMemFree(appdata_path);
+        savePath += L"\\ArgumentDebugger\\saved_data.txt";
+    }
+
+    // Store all path information
+    cached_path_items_ = {
+        {L"OS Version: ", osVersion},
+        {L"Wine/Proton: ", wineVersion},
+        {L"Executable name: ", exeName},
+        {L"Full path: ", fullPath},
+        {L"Executable directory: ", exeDir},
+        {L"Current directory: ", currentDirStr},
+        {L"Command line: ", cmdLine},
+        {L"Save file path: ", savePath},
+        {L"TEMP directory: ", tempDir},
+        {L"Windows directory: ", winDir},
+        {L"System directory: ", sysDir}
+    };
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
