@@ -235,7 +235,7 @@ constexpr const wchar_t* kWindowCaption = L"Argument Debugger";
 // Description text for the window
 const std::vector<std::wstring> kDescriptionLines = {
     L"Argument Debugger", L"This utility displays all command-line arguments in a full-screen window.",
-    L"Type 'exit', 'save', 'read', 'logs' or 'paths' and press Enter to execute commands."};
+    L"Type 'exit', 'save', 'read', 'logs' or 'path' and press Enter to execute commands."};
 
 constexpr float kMargin = 20.0f;
 constexpr float kLineHeight = 30.0f;
@@ -550,9 +550,9 @@ void ArgumentDebuggerWindow::OnCharInput(wchar_t ch)
             Log(L"Command: logs");
             ShowLogs();
         }
-        else if (_wcsicmp(user_input_.c_str(), L"paths") == 0)
+        else if (_wcsicmp(user_input_.c_str(), L"path") == 0)
         {
-            Log(L"Command: paths");
+            Log(L"Command: path");
             show_paths_ = !show_paths_;
             command_status_ = show_paths_ ? L"File paths enabled." : L"File paths disabled.";
         }
@@ -1247,7 +1247,7 @@ void ArgumentDebuggerWindow::RenderFrame()
     } // End of if (show_paths_)
 
     // Input field and prompt.
-    std::wstring exit_prompt = L"Type 'exit', 'save', 'read', 'logs' or 'paths' and press Enter:";
+    std::wstring exit_prompt = L"Type 'exit', 'save', 'read', 'logs' or 'path' and press Enter:";
     D2D1_RECT_F exit_prompt_rect =
         D2D1::RectF(kMargin, size.height - 100.0f, size.width - kMargin, size.height - 70.0f);
     d2d_render_target_->DrawText(exit_prompt.c_str(), static_cast<UINT32>(exit_prompt.size()), text_format_.Get(),
