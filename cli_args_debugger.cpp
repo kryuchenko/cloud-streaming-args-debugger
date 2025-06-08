@@ -1191,9 +1191,10 @@ void ArgumentDebuggerWindow::RenderFrame()
     }
 
     // Use smaller font for path information
-    // Position in the right-center part of the screen to avoid overlap with mic indicators
-    float pathStartX = size.width * 0.5f;  // Start from center of screen
-    float pathEndX = size.width - 350.0f;  // Leave space for mic indicators
+    // Position at the right edge, aligned with mic indicators
+    float pathWidth = 400.0f;  // Width of the path info block
+    float pathEndX = size.width - kMargin;  // Same margin as mic indicators
+    float pathStartX = pathEndX - pathWidth;  // Left edge of the path block
     float pathStartY = size.height * 0.3f; // Move up a bit to fit more items
     float pathLineHeight = 25.0f;
 
