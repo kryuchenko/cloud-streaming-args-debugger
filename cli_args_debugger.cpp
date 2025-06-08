@@ -1002,101 +1002,101 @@ void ArgumentDebuggerWindow::RenderFrame()
         GetModuleFileNameW(nullptr, exePath, MAX_PATH);
         std::wstring fullPath = exePath;
 
-    // Get current working directory for relative path
-    wchar_t currentDir[MAX_PATH] = L"\0";
-    GetCurrentDirectoryW(MAX_PATH, currentDir);
-    std::wstring currentDirStr = currentDir;
+        // Get current working directory for relative path
+        wchar_t currentDir[MAX_PATH] = L"\0";
+        GetCurrentDirectoryW(MAX_PATH, currentDir);
+        std::wstring currentDirStr = currentDir;
 
-    // Extract just the executable name
-    std::wstring exeName = fullPath;
-    size_t lastSlash = exeName.find_last_of(L"\\");
-    if (lastSlash != std::wstring::npos)
-    {
-        exeName = exeName.substr(lastSlash + 1);
-    }
-
-    // Extract directory from full path
-    std::wstring exeDir = fullPath;
-    if (lastSlash != std::wstring::npos)
-    {
-        exeDir = exeDir.substr(0, lastSlash);
-    }
-
-    // Calculate relative path
-    std::wstring relativePath;
-    if (fullPath.find(currentDirStr) == 0)
-    {
-        // If the exe is within the current directory, show relative path
-        relativePath = L"." + fullPath.substr(currentDirStr.length());
-    }
-    else
-    {
-        // Otherwise, just show the full path
-        relativePath = fullPath;
-    }
-
-    // Get TEMP directory
-    wchar_t tempPath[MAX_PATH] = L"\0";
-    GetTempPathW(MAX_PATH, tempPath);
-    std::wstring tempDir = tempPath;
-    if (!tempDir.empty() && tempDir.back() == L'\\')
-    {
-        tempDir.pop_back(); // Remove trailing slash
-    }
-
-    // Get Windows directory
-    wchar_t winPath[MAX_PATH] = L"\0";
-    GetWindowsDirectoryW(winPath, MAX_PATH);
-    std::wstring winDir = winPath;
-
-    // Get System directory
-    wchar_t sysPath[MAX_PATH] = L"\0";
-    GetSystemDirectoryW(sysPath, MAX_PATH);
-    std::wstring sysDir = sysPath;
-
-    // Get command line
-    std::wstring cmdLine = GetCommandLineW();
-
-    // Get OS version
-    std::wstring osVersion = L"Unknown";
-    typedef NTSTATUS(WINAPI * RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
-    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
-    if (hNtdll)
-    {
-        RtlGetVersionPtr RtlGetVersion = (RtlGetVersionPtr)GetProcAddress(hNtdll, "RtlGetVersion");
-        if (RtlGetVersion)
+        // Extract just the executable name
+        std::wstring exeName = fullPath;
+        size_t lastSlash = exeName.find_last_of(L"\\");
+        if (lastSlash != std::wstring::npos)
         {
-            RTL_OSVERSIONINFOW osvi = {0};
-            osvi.dwOSVersionInfoSize = sizeof(osvi);
-            if (RtlGetVersion(&osvi) == 0)
+            exeName = exeName.substr(lastSlash + 1);
+        }
+
+        // Extract directory from full path
+        std::wstring exeDir = fullPath;
+        if (lastSlash != std::wstring::npos)
+        {
+            exeDir = exeDir.substr(0, lastSlash);
+        }
+
+        // Calculate relative path
+        std::wstring relativePath;
+        if (fullPath.find(currentDirStr) == 0)
+        {
+            // If the exe is within the current directory, show relative path
+            relativePath = L"." + fullPath.substr(currentDirStr.length());
+        }
+        else
+        {
+            // Otherwise, just show the full path
+            relativePath = fullPath;
+        }
+
+        // Get TEMP directory
+        wchar_t tempPath[MAX_PATH] = L"\0";
+        GetTempPathW(MAX_PATH, tempPath);
+        std::wstring tempDir = tempPath;
+        if (!tempDir.empty() && tempDir.back() == L'\\')
+        {
+            tempDir.pop_back(); // Remove trailing slash
+        }
+
+        // Get Windows directory
+        wchar_t winPath[MAX_PATH] = L"\0";
+        GetWindowsDirectoryW(winPath, MAX_PATH);
+        std::wstring winDir = winPath;
+
+        // Get System directory
+        wchar_t sysPath[MAX_PATH] = L"\0";
+        GetSystemDirectoryW(sysPath, MAX_PATH);
+        std::wstring sysDir = sysPath;
+
+        // Get command line
+        std::wstring cmdLine = GetCommandLineW();
+
+        // Get OS version
+        std::wstring osVersion = L"Unknown";
+        typedef NTSTATUS(WINAPI * RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
+        HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+        if (hNtdll)
+        {
+            RtlGetVersionPtr RtlGetVersion = (RtlGetVersionPtr)GetProcAddress(hNtdll, "RtlGetVersion");
+            if (RtlGetVersion)
             {
-                osVersion = L"Windows " + std::to_wstring(osvi.dwMajorVersion) + L"." +
-                            std::to_wstring(osvi.dwMinorVersion) + L" (Build " + std::to_wstring(osvi.dwBuildNumber) +
-                            L")";
+                RTL_OSVERSIONINFOW osvi = {0};
+                osvi.dwOSVersionInfoSize = sizeof(osvi);
+                if (RtlGetVersion(&osvi) == 0)
+                {
+                    osVersion = L"Windows " + std::to_wstring(osvi.dwMajorVersion) + L"." +
+                                std::to_wstring(osvi.dwMinorVersion) + L" (Build " + std::to_wstring(osvi.dwBuildNumber) +
+                                L")";
+                }
             }
         }
-    }
 
-    // Check for Wine/Proton
-    std::wstring wineVersion = L"Not detected";
-    HMODULE hNtdllCheck = GetModuleHandleW(L"ntdll.dll");
-    if (hNtdllCheck)
-    {
-        if (GetProcAddress(hNtdllCheck, "wine_get_version"))
+        // Check for Wine/Proton
+        std::wstring wineVersion = L"Not detected";
+        HMODULE hNtdllCheck = GetModuleHandleW(L"ntdll.dll");
+        if (hNtdllCheck)
         {
-            typedef const char* (*wine_get_version_func)(void);
-            wine_get_version_func wine_get_version =
-                (wine_get_version_func)GetProcAddress(hNtdllCheck, "wine_get_version");
-            if (wine_get_version)
+            if (GetProcAddress(hNtdllCheck, "wine_get_version"))
             {
-                const char* version = wine_get_version();
-                if (version)
+                typedef const char* (*wine_get_version_func)(void);
+                wine_get_version_func wine_get_version =
+                    (wine_get_version_func)GetProcAddress(hNtdllCheck, "wine_get_version");
+                if (wine_get_version)
                 {
-                    // Convert char* to wstring
-                    int size_needed = MultiByteToWideChar(CP_UTF8, 0, version, -1, NULL, 0);
-                    std::wstring wversion(size_needed - 1, 0);
-                    MultiByteToWideChar(CP_UTF8, 0, version, -1, &wversion[0], size_needed);
-                    wineVersion = L"Wine " + wversion;
+                    const char* version = wine_get_version();
+                    if (version)
+                    {
+                        // Convert char* to wstring
+                        int size_needed = MultiByteToWideChar(CP_UTF8, 0, version, -1, NULL, 0);
+                        std::wstring wversion(size_needed - 1, 0);
+                        MultiByteToWideChar(CP_UTF8, 0, version, -1, &wversion[0], size_needed);
+                        wineVersion = L"Wine " + wversion;
 
                     // Check multiple Proton-related environment variables
                     wchar_t envBuf[1024] = {0};
@@ -1209,41 +1209,41 @@ void ArgumentDebuggerWindow::RenderFrame()
         }
     }
 
-    // Get save path
-    std::wstring savePath = L"Not available";
-    PWSTR appdata_path = nullptr;
-    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
-    if (SUCCEEDED(hr))
-    {
-        savePath = appdata_path;
-        CoTaskMemFree(appdata_path);
-        savePath += L"\\ArgumentDebugger\\saved_data.txt";
-    }
+        // Get save path
+        std::wstring savePath = L"Not available";
+        PWSTR appdata_path = nullptr;
+        HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
+        if (SUCCEEDED(hr))
+        {
+            savePath = appdata_path;
+            CoTaskMemFree(appdata_path);
+            savePath += L"\\ArgumentDebugger\\saved_data.txt";
+        }
 
-    // Use smaller font for path information
-    // Position at the right edge, aligned with mic indicators
-    float pathWidth = 400.0f;  // Width of the path info block
-    float pathEndX = size.width - kMargin;  // Same margin as mic indicators
-    float pathStartX = pathEndX - pathWidth;  // Left edge of the path block
-    float pathStartY = size.height * 0.3f; // Move up a bit to fit more items
-    float pathLineHeight = 25.0f;
+        // Use smaller font for path information
+        // Position at the right edge, aligned with mic indicators
+        float pathWidth = 400.0f;  // Width of the path info block
+        float pathEndX = size.width - kMargin;  // Same margin as mic indicators
+        float pathStartX = pathEndX - pathWidth;  // Left edge of the path block
+        float pathStartY = size.height * 0.3f; // Move up a bit to fit more items
+        float pathLineHeight = 25.0f;
 
-    // Draw all path information with smaller font
-    std::vector<std::pair<std::wstring, std::wstring>> pathItems = {
-        {L"OS Version: ", osVersion},     {L"Wine/Proton: ", wineVersion},     {L"Executable name: ", exeName},
-        {L"Full path: ", fullPath},       {L"Executable directory: ", exeDir}, {L"Current directory: ", currentDirStr},
-        {L"Command line: ", cmdLine},     {L"Save file path: ", savePath},     {L"TEMP directory: ", tempDir},
-        {L"Windows directory: ", winDir}, {L"System directory: ", sysDir}};
+        // Draw all path information with smaller font
+        std::vector<std::pair<std::wstring, std::wstring>> pathItems = {
+            {L"OS Version: ", osVersion},     {L"Wine/Proton: ", wineVersion},     {L"Executable name: ", exeName},
+            {L"Full path: ", fullPath},       {L"Executable directory: ", exeDir}, {L"Current directory: ", currentDirStr},
+            {L"Command line: ", cmdLine},     {L"Save file path: ", savePath},     {L"TEMP directory: ", tempDir},
+            {L"Windows directory: ", winDir}, {L"System directory: ", sysDir}};
 
-    float currentY = pathStartY;
-    for (const auto& item : pathItems)
-    {
-        std::wstring fullLine = item.first + item.second;
-        D2D1_RECT_F rect = D2D1::RectF(pathStartX, currentY, pathEndX, currentY + pathLineHeight);
-        d2d_render_target_->DrawText(fullLine.c_str(), static_cast<UINT32>(fullLine.size()), small_text_format_.Get(),
-                                     rect, white_brush_.Get());
-        currentY += pathLineHeight;
-    }
+        float currentY = pathStartY;
+        for (const auto& item : pathItems)
+        {
+            std::wstring fullLine = item.first + item.second;
+            D2D1_RECT_F rect = D2D1::RectF(pathStartX, currentY, pathEndX, currentY + pathLineHeight);
+            d2d_render_target_->DrawText(fullLine.c_str(), static_cast<UINT32>(fullLine.size()), small_text_format_.Get(),
+                                         rect, white_brush_.Get());
+            currentY += pathLineHeight;
+        }
     } // End of if (show_paths_)
 
     // Input field and prompt.
