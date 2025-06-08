@@ -1263,7 +1263,7 @@ void ArgumentDebuggerWindow::RenderFrame()
         constexpr int qr_size = 375;
         constexpr float qr_margin = 60.0f;
         float qr_x = qr_margin;
-        float qr_y = size.height - qr_size - qr_margin - 100.0f;
+        float qr_y = size.height - qr_size - qr_margin - 100.0f - (size.height * 0.2f); // Raised by 20% of screen height
         d2d_render_target_->DrawBitmap(qr_bitmap_.Get(), D2D1::RectF(qr_x, qr_y, qr_x + qr_size, qr_y + qr_size));
     }
 
