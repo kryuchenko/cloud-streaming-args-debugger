@@ -235,7 +235,7 @@ constexpr const wchar_t* kWindowCaption = L"Argument Debugger";
 // Description text for the window
 const std::vector<std::wstring> kDescriptionLines = {
     L"Argument Debugger", L"This utility displays all command-line arguments in a full-screen window.",
-    L"Type 'exit', 'save', 'read' or 'logs' and press Enter to execute commands."};
+    L"Type 'exit', 'save', 'read', 'logs' or 'paths' and press Enter to execute commands."};
 
 constexpr float kMargin = 20.0f;
 constexpr float kLineHeight = 30.0f;
@@ -325,6 +325,7 @@ class ArgumentDebuggerWindow
     // New variables for displaying command status and loaded data:
     std::wstring command_status_;
     std::wstring loaded_data_;
+    bool show_paths_ = false; // Flag to control file paths display
 
     // Variables for FPS and QR code
     float current_fps_ = 0.0f;
@@ -548,6 +549,12 @@ void ArgumentDebuggerWindow::OnCharInput(wchar_t ch)
         {
             Log(L"Command: logs");
             ShowLogs();
+        }
+        else if (_wcsicmp(user_input_.c_str(), L"paths") == 0)
+        {
+            Log(L"Command: paths");
+            show_paths_ = !show_paths_;
+            command_status_ = show_paths_ ? L"File paths enabled." : L"File paths disabled.";
         }
         else
         {
@@ -987,10 +994,13 @@ void ArgumentDebuggerWindow::RenderFrame()
         d2d_render_target_->DrawText(L"Log File Contents:", 17, text_format_.Get(), title_rect, yellow_brush_.Get());
     }
 
-    // Display full and relative path where the application is running
-    wchar_t exePath[MAX_PATH] = L"\0";
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    std::wstring fullPath = exePath;
+    // Display file paths only if enabled
+    if (show_paths_)
+    {
+        // Display full and relative path where the application is running
+        wchar_t exePath[MAX_PATH] = L"\0";
+        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        std::wstring fullPath = exePath;
 
     // Get current working directory for relative path
     wchar_t currentDir[MAX_PATH] = L"\0";
@@ -1234,9 +1244,10 @@ void ArgumentDebuggerWindow::RenderFrame()
                                      rect, white_brush_.Get());
         currentY += pathLineHeight;
     }
+    } // End of if (show_paths_)
 
     // Input field and prompt.
-    std::wstring exit_prompt = L"Type 'exit', 'save', 'read' or 'logs' and press Enter:";
+    std::wstring exit_prompt = L"Type 'exit', 'save', 'read', 'logs' or 'paths' and press Enter:";
     D2D1_RECT_F exit_prompt_rect =
         D2D1::RectF(kMargin, size.height - 100.0f, size.width - kMargin, size.height - 70.0f);
     d2d_render_target_->DrawText(exit_prompt.c_str(), static_cast<UINT32>(exit_prompt.size()), text_format_.Get(),
