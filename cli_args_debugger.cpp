@@ -329,6 +329,7 @@ class ArgumentDebuggerWindow
     std::wstring command_status_;
     std::wstring loaded_data_;
     bool show_paths_ = false; // Flag to control file paths display
+    bool show_logs_ = false; // Flag to control logs display
     
     // Cached path information to avoid expensive system calls every frame
     std::vector<std::pair<std::wstring, std::wstring>> cached_path_items_;
@@ -554,7 +555,17 @@ void ArgumentDebuggerWindow::OnCharInput(wchar_t ch)
         else if (_wcsicmp(user_input_.c_str(), L"logs") == 0)
         {
             Log(L"Command: logs");
-            ShowLogs();
+            show_logs_ = !show_logs_;
+            if (show_logs_)
+            {
+                ShowLogs();
+                command_status_ = L"Logs enabled.";
+            }
+            else
+            {
+                loaded_data_.clear();
+                command_status_ = L"Logs disabled.";
+            }
         }
         else if (_wcsicmp(user_input_.c_str(), L"path") == 0)
         {
@@ -998,7 +1009,7 @@ void ArgumentDebuggerWindow::RenderFrame()
     }
 
     // Draw loaded data (if any) in the top-right corner.
-    if (!loaded_data_.empty())
+    if (show_logs_ && !loaded_data_.empty())
     {
         // Use a smaller font for logs and expand the display area
         // Added padding at the bottom (reduced height by 20px)
