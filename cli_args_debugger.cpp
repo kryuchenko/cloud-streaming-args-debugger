@@ -604,12 +604,6 @@ void ArgumentDebuggerWindow::OnCharInput(wchar_t ch)
         if (!user_input_.empty())
             user_input_.pop_back();
     }
-    else if (ch == VK_ESCAPE)
-    {
-        Log(L"Command: exit (via Escape)");
-        PostQuitMessage(0);
-        is_running_ = false;
-    }
     else
     {
         user_input_ += ch;
@@ -1938,10 +1932,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     case WM_CHAR:
         Log(L"WM_CHAR: \"" + std::wstring(1, static_cast<wchar_t>(wparam)) + L"\"");
         if (g_app_instance && g_app_instance->is_running())
-            g_app_instance->OnCharInput(static_cast<wchar_t>(wparam));
-        break;
-    case WM_KEYDOWN:
-        if (wparam == VK_ESCAPE && g_app_instance && g_app_instance->is_running())
             g_app_instance->OnCharInput(static_cast<wchar_t>(wparam));
         break;
     case WM_DESTROY:
