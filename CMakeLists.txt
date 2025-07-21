@@ -59,7 +59,7 @@ if(MSVC)
         # AddressSanitizer for MSVC (requires VS 2019 16.9+)
         if(ENABLE_ASAN)
             target_compile_options(cloud-streaming-args-debugger PRIVATE "/fsanitize=address")
-            target_link_options(cloud-streaming-args-debugger PRIVATE "/fsanitize=address")
+            # MSVC doesn't need link options for ASan, it's handled automatically
         endif()
     endif()
 endif()

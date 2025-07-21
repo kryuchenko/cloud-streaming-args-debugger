@@ -67,6 +67,11 @@ if(MSVC)
             "/GS"        # Buffer security check
             "/sdl"       # Additional security checks
         )
+        
+        # AddressSanitizer for tests
+        if(ENABLE_ASAN)
+            target_compile_options(cli_args_tests PRIVATE "/fsanitize=address")
+        endif()
     endif()
     
     # Explicitly specify UNICODE and exclude main from cli_args_debugger.cpp

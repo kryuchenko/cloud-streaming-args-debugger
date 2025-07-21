@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <windows.h>
+#include <strsafe.h>  // For StringCchCopyW
 #include <audioclient.h>
 #include <vector>
 #include <limits>

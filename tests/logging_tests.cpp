@@ -184,7 +184,16 @@ TEST_F(LoggingTest, LogWritesMultipleMessages)
                 break;
             }
         }
-        EXPECT_TRUE(found) << "Message not found: " << std::string(msg.begin(), msg.end());
+        // Convert wide string to narrow string safely
+        std::string narrowMsg;
+        for (wchar_t wc : msg) {
+            if (wc <= 127) {
+                narrowMsg += static_cast<char>(wc);
+            } else {
+                narrowMsg += '?';
+            }
+        }
+        EXPECT_TRUE(found) << "Message not found: " << narrowMsg;
     }
 }
 
