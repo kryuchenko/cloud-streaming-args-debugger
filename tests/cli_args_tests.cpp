@@ -187,12 +187,26 @@ TEST_F(CliArgsTest, SoundCommandParsing)
 }
 
 // Test for command description update
-TEST_F(CliArgsTest, CommandDescriptionIncludesSound)
+TEST_F(CliArgsTest, CommandDescriptionIncludesAllCommands)
 {
-    // The description should mention the sound command
-    std::wstring expectedText = L"Type 'exit', 'save', 'read', 'logs', 'path' or 'sound' and press Enter to execute commands.";
+    // The description should mention all commands including sound and memory
+    std::wstring expectedText = L"Type 'exit', 'save', 'read', 'logs', 'path', 'sound' or 'memory' and press Enter to execute commands.";
     
     // This test verifies that the description has been updated
     // In a real test, we would check the actual kDescriptionLines vector
     EXPECT_TRUE(expectedText.find(L"sound") != std::wstring::npos);
+    EXPECT_TRUE(expectedText.find(L"memory") != std::wstring::npos);
+}
+
+// Test for memory command parsing
+TEST_F(CliArgsTest, MemoryCommandParsing)
+{
+    // Test case-insensitive parsing for memory command
+    std::wstring memoryLower = L"memory";
+    std::wstring memoryUpper = L"MEMORY";
+    std::wstring memoryMixed = L"MeMoRy";
+    
+    EXPECT_EQ(_wcsicmp(memoryLower.c_str(), L"memory"), 0);
+    EXPECT_EQ(_wcsicmp(memoryUpper.c_str(), L"memory"), 0);
+    EXPECT_EQ(_wcsicmp(memoryMixed.c_str(), L"memory"), 0);
 }

@@ -32,6 +32,8 @@ target_link_libraries(cloud-streaming-args-debugger PRIVATE
     shell32
     gdi32
     propsys
+    winmm
+    psapi
 )
 
 # Windows-specific compiler options

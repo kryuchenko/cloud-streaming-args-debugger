@@ -33,7 +33,7 @@ jobs:
            cli_args_debugger.cpp seh_wrapper.cpp qrcodegen.cpp ^
            /Fe:build\cloud-streaming-args-debugger.exe ^
            /Fo:obj\ ^
-           /link d3d11.lib d3dcompiler.lib d2d1.lib dwrite.lib ole32.lib avrt.lib user32.lib shell32.lib gdi32.lib propsys.lib
+           /link d3d11.lib d3dcompiler.lib d2d1.lib dwrite.lib ole32.lib avrt.lib user32.lib shell32.lib gdi32.lib propsys.lib winmm.lib psapi.lib
     - name: Package into zip
       shell: pwsh
       run: |

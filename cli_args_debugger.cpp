@@ -51,6 +51,13 @@
 #include <windows.h>
 #include <mmsystem.h>  // For PlaySound
 #include <wrl/client.h>
+#include <psapi.h>  // For GetProcessMemoryInfo
+
+// Debug memory leak detection
+#ifdef _DEBUG
+#define _CRTDBG_MAP_ALLOC
+#include <crtdbg.h>
+#endif
 #define INITGUID                           // Required by /permissive- for GUID initialization
 #include <functiondiscoverykeys_devpkey.h> // For PKEY_Device_FriendlyName
 #include <ks.h>                            // For GUID constants
@@ -73,6 +80,7 @@
 #pragma comment(lib, "shell32") // For SHGetKnownFolderPath
 #pragma comment(lib, "gdi32")   // For GDI functions
 #pragma comment(lib, "winmm")   // For PlaySound
+#pragma comment(lib, "psapi")   // For GetProcessMemoryInfo
 
 // Include QrCodeGen (ensure that qrcodegen.hpp and qrcodegen.cpp are in your project)
 #include "qrcodegen.hpp"
@@ -238,7 +246,7 @@ constexpr const wchar_t* kWindowCaption = L"Cloud Streaming Args Debugger";
 // Description text for the window
 const std::vector<std::wstring> kDescriptionLines = {
     L"Cloud Streaming Args Debugger", L"This utility displays all command-line arguments for cloud streaming applications.",
-    L"Type 'exit', 'save', 'read', 'logs', 'path' or 'sound' and press Enter to execute commands."};
+    L"Type 'exit', 'save', 'read', 'logs', 'path', 'sound' or 'memory' and press Enter to execute commands."};
 
 constexpr float kMargin = 20.0f;
 constexpr float kLineHeight = 30.0f;
@@ -323,6 +331,9 @@ class ArgumentDebuggerWindow
     
     // Play telephone-like beeps for 1 minute
     void PlayTelephoneBeeps();
+    
+    // Show memory usage statistics
+    void ShowMemoryStats();
 
     HWND window_handle_ = nullptr;
     bool is_running_ = true;
@@ -394,6 +405,13 @@ class ArgumentDebuggerWindow
 #ifndef EXCLUDE_MAIN
 int WINAPI wWinMain(HINSTANCE h_instance, HINSTANCE, PWSTR, int cmd_show)
 {
+#ifdef _DEBUG
+    // Enable memory leak detection in debug builds
+    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+    // Break on allocation number (uncomment to debug specific leak)
+    // _CrtSetBreakAlloc(123);
+#endif
+
     try
     {
         // Initialize COM once at the start - STA is the safest option for UI thread and D2D
@@ -533,6 +551,13 @@ int ArgumentDebuggerWindow::RunMessageLoop()
             PostQuitMessage(1);
             break;
         }
+        catch (...)
+        {
+            Log(L"Unknown exception in render loop - terminating");
+            MessageBoxW(window_handle_, L"Unknown error occurred", L"Error", MB_ICONERROR);
+            PostQuitMessage(1);
+            break;
+        }
     }
 
     Log(L"RunMessageLoop: finished");
@@ -605,6 +630,11 @@ void ArgumentDebuggerWindow::OnCharInput(wchar_t ch)
             command_status_ = L"Playing low-frequency beeps (300Hz) for 1 minute...";
             PlayTelephoneBeeps();
         }
+        else if (_wcsicmp(user_input_.c_str(), L"memory") == 0)
+        {
+            Log(L"Command: memory");
+            ShowMemoryStats();
+        }
         else
         {
             command_status_ = L"Unknown command.";
@@ -634,10 +664,15 @@ void ArgumentDebuggerWindow::OnDestroy()
     if (audio_event_)
         SetEvent(audio_event_);
 
-    // 2. Wait for thread completion
+    // 2. Wait for thread completion with timeout to prevent hanging
     if (audio_thread_)
     {
-        WaitForSingleObject(audio_thread_, INFINITE);
+        DWORD wait_result = WaitForSingleObject(audio_thread_, 5000);  // 5 second timeout
+        if (wait_result == WAIT_TIMEOUT)
+        {
+            Log(L"WARNING: Audio thread did not terminate gracefully, forcing termination");
+            TerminateThread(audio_thread_, 0);
+        }
         CloseHandle(audio_thread_);
         audio_thread_ = nullptr;
     }
@@ -1076,7 +1111,7 @@ void ArgumentDebuggerWindow::RenderFrame()
     } // End of if (show_paths_)
 
     // Input field and prompt.
-    std::wstring exit_prompt = L"Type 'exit', 'save', 'read', 'logs', 'path' or 'sound' and press Enter:";
+    std::wstring exit_prompt = L"Type 'exit', 'save', 'read', 'logs', 'path', 'sound' or 'memory' and press Enter:";
     D2D1_RECT_F exit_prompt_rect =
         D2D1::RectF(kMargin, size.height - 100.0f, size.width - kMargin, size.height - 70.0f);
     d2d_render_target_->DrawText(exit_prompt.c_str(), static_cast<UINT32>(exit_prompt.size()), text_format_.Get(),
@@ -1637,7 +1672,27 @@ void ArgumentDebuggerWindow::Cleanup()
 {
     Log(L"Cleanup started");
 
-    // Reset all ComPtr objects to automatically release resources.
+    // Stop audio first if still running
+    if (audio_client_)
+    {
+        try
+        {
+            audio_client_->Stop();
+            Log(L"Audio client stopped in cleanup");
+        }
+        catch (...)
+        {
+            Log(L"Exception stopping audio client in cleanup");
+        }
+    }
+
+    // Reset audio COM objects first
+    capture_client_.Reset();
+    audio_client_.Reset();
+    capture_device_.Reset();
+    device_enumerator_.Reset();
+
+    // Reset all graphics ComPtr objects to automatically release resources.
     vertex_shader_.Reset();
     pixel_shader_.Reset();
     vertex_layout_.Reset();
@@ -1958,6 +2013,59 @@ void ArgumentDebuggerWindow::PlayTelephoneBeeps()  // Name kept for compatibilit
     
     // Detach thread so it runs independently
     beepThread.detach();
+}
+
+void ArgumentDebuggerWindow::ShowMemoryStats()
+{
+    try
+    {
+        PROCESS_MEMORY_COUNTERS_EX pmc;
+        if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc)))
+        {
+            // Format memory statistics
+            std::wstring stats;
+            stats += L"=== MEMORY STATISTICS ===\n";
+            stats += L"Working Set (RAM): " + std::to_wstring(pmc.WorkingSetSize / 1024 / 1024) + L" MB\n";
+            stats += L"Peak Working Set: " + std::to_wstring(pmc.PeakWorkingSetSize / 1024 / 1024) + L" MB\n";
+            stats += L"Private Bytes: " + std::to_wstring(pmc.PrivateUsage / 1024 / 1024) + L" MB\n";
+            stats += L"Virtual Memory: " + std::to_wstring(pmc.PagefileUsage / 1024 / 1024) + L" MB\n";
+            stats += L"Peak Virtual: " + std::to_wstring(pmc.PeakPagefileUsage / 1024 / 1024) + L" MB\n";
+            
+            // Get system memory info
+            MEMORYSTATUSEX memInfo;
+            memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+            if (GlobalMemoryStatusEx(&memInfo))
+            {
+                stats += L"\n=== SYSTEM MEMORY ===\n";
+                stats += L"Total RAM: " + std::to_wstring(memInfo.ullTotalPhys / 1024 / 1024) + L" MB\n";
+                stats += L"Available RAM: " + std::to_wstring(memInfo.ullAvailPhys / 1024 / 1024) + L" MB\n";
+                stats += L"Memory Load: " + std::to_wstring(memInfo.dwMemoryLoad) + L"%\n";
+            }
+            
+            // Add runtime information
+            ULONGLONG uptime = GetTickCount64();
+            stats += L"\n=== RUNTIME ===\n";
+            stats += L"Uptime: " + std::to_wstring(uptime / 1000) + L" seconds\n";
+            
+            // Store in loaded_data_ to display on screen
+            loaded_data_ = stats;
+            loaded_data_title_ = L"Memory Statistics:";
+            show_logs_ = true;
+            
+            command_status_ = L"Memory statistics displayed.";
+            Log(L"Memory stats: WorkingSet=" + std::to_wstring(pmc.WorkingSetSize / 1024 / 1024) + L"MB");
+        }
+        else
+        {
+            command_status_ = L"Failed to get memory statistics.";
+            Log(L"Failed to get process memory info");
+        }
+    }
+    catch (...)
+    {
+        command_status_ = L"Error getting memory statistics.";
+        Log(L"Exception in ShowMemoryStats");
+    }
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
