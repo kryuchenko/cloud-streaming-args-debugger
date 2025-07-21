@@ -254,18 +254,18 @@ TEST_F(AudioTest, BeepFunctionAvailable)
 TEST_F(AudioTest, TelephoneBeepTiming)
 {
     // Test the timing calculations for telephone beep pattern
-    const int beepDuration = 200;  // 200ms per beep
+    const int beepDuration = 500;  // 500ms per beep
     const int pauseBetweenBeeps = 100; // 100ms between beeps in pair
     const int pauseBetweenPairs = 1000; // 1 second between pairs
     
     // Calculate time for one complete cycle
     int oneCycleTime = beepDuration + pauseBetweenBeeps + beepDuration + pauseBetweenPairs;
-    EXPECT_EQ(oneCycleTime, 1500); // 1.5 seconds per cycle
+    EXPECT_EQ(oneCycleTime, 2100); // 2.1 seconds per cycle
     
     // Calculate approximate number of cycles in 1 minute
     const int totalDuration = 60000; // 1 minute
     int expectedCycles = totalDuration / oneCycleTime;
-    EXPECT_EQ(expectedCycles, 40); // 40 complete cycles in 60 seconds
+    EXPECT_EQ(expectedCycles, 28); // 28 complete cycles in 60 seconds (with longer beeps)
 }
 
 // Test thread creation for beep playback

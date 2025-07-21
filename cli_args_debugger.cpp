@@ -1076,7 +1076,7 @@ void ArgumentDebuggerWindow::RenderFrame()
     } // End of if (show_paths_)
 
     // Input field and prompt.
-    std::wstring exit_prompt = L"Type 'exit', 'save', 'read', 'logs' or 'path' and press Enter:";
+    std::wstring exit_prompt = L"Type 'exit', 'save', 'read', 'logs', 'path' or 'sound' and press Enter:";
     D2D1_RECT_F exit_prompt_rect =
         D2D1::RectF(kMargin, size.height - 100.0f, size.width - kMargin, size.height - 70.0f);
     d2d_render_target_->DrawText(exit_prompt.c_str(), static_cast<UINT32>(exit_prompt.size()), text_format_.Get(),
@@ -1939,7 +1939,7 @@ void ArgumentDebuggerWindow::PlayTelephoneBeeps()
     // Create a separate thread to play beeps so UI doesn't freeze
     std::thread beepThread([]() {
         // Telephone-like beep pattern: 2 short beeps with pause, repeat for 1 minute
-        const int beepDuration = 200;  // 200ms per beep
+        const int beepDuration = 500;  // 500ms per beep (longer beeps)
         const int beepFrequency = 800; // 800Hz - typical telephone tone
         const int pauseBetweenBeeps = 100; // 100ms between beeps in pair
         const int pauseBetweenPairs = 1000; // 1 second between pairs
