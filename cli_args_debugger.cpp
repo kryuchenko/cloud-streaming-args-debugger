@@ -46,8 +46,10 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 #include <windows.h>
+#include <mmsystem.h>  // For PlaySound
 #include <wrl/client.h>
 #define INITGUID                           // Required by /permissive- for GUID initialization
 #include <functiondiscoverykeys_devpkey.h> // For PKEY_Device_FriendlyName
@@ -70,6 +72,7 @@
 #pragma comment(lib, "user32")  // For window functions
 #pragma comment(lib, "shell32") // For SHGetKnownFolderPath
 #pragma comment(lib, "gdi32")   // For GDI functions
+#pragma comment(lib, "winmm")   // For PlaySound
 
 // Include QrCodeGen (ensure that qrcodegen.hpp and qrcodegen.cpp are in your project)
 #include "qrcodegen.hpp"
@@ -235,7 +238,7 @@ constexpr const wchar_t* kWindowCaption = L"Argument Debugger";
 // Description text for the window
 const std::vector<std::wstring> kDescriptionLines = {
     L"Argument Debugger", L"This utility displays all command-line arguments in a full-screen window.",
-    L"Type 'exit', 'save', 'read', 'logs' or 'path' and press Enter to execute commands."};
+    L"Type 'exit', 'save', 'read', 'logs', 'path' or 'sound' and press Enter to execute commands."};
 
 constexpr float kMargin = 20.0f;
 constexpr float kLineHeight = 30.0f;
@@ -317,6 +320,9 @@ class ArgumentDebuggerWindow
     
     // Helper to calculate and cache path information once
     void CalculatePathInfo();
+    
+    // Play telephone-like beeps for 1 minute
+    void PlayTelephoneBeeps();
 
     HWND window_handle_ = nullptr;
     bool is_running_ = true;
@@ -592,6 +598,12 @@ void ArgumentDebuggerWindow::OnCharInput(wchar_t ch)
                 cached_path_items_.clear();
                 command_status_ = L"File paths disabled.";
             }
+        }
+        else if (_wcsicmp(user_input_.c_str(), L"sound") == 0)
+        {
+            Log(L"Command: sound");
+            command_status_ = L"Playing telephone beeps for 1 minute...";
+            PlayTelephoneBeeps();
         }
         else
         {
@@ -1920,6 +1932,35 @@ void ArgumentDebuggerWindow::CalculatePathInfo()
         {L"Windows directory: ", winDir},
         {L"System directory: ", sysDir}
     };
+}
+
+void ArgumentDebuggerWindow::PlayTelephoneBeeps()
+{
+    // Create a separate thread to play beeps so UI doesn't freeze
+    std::thread beepThread([]() {
+        // Telephone-like beep pattern: 2 short beeps with pause, repeat for 1 minute
+        const int beepDuration = 200;  // 200ms per beep
+        const int beepFrequency = 800; // 800Hz - typical telephone tone
+        const int pauseBetweenBeeps = 100; // 100ms between beeps in pair
+        const int pauseBetweenPairs = 1000; // 1 second between pairs
+        const int totalDuration = 60000; // 1 minute total
+        
+        DWORD startTime = GetTickCount();
+        
+        while (GetTickCount() - startTime < totalDuration)
+        {
+            // First beep
+            Beep(beepFrequency, beepDuration);
+            Sleep(pauseBetweenBeeps);
+            
+            // Second beep
+            Beep(beepFrequency, beepDuration);
+            Sleep(pauseBetweenPairs);
+        }
+    });
+    
+    // Detach thread so it runs independently
+    beepThread.detach();
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
