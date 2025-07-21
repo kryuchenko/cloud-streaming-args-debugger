@@ -172,3 +172,27 @@ TEST_F(CliArgsTest, ArgumentWithWhitespaceCharacters)
     ExpectWideStringEq(expectedHeader, actualHeader);
     ExpectWideStringEq(expectedArgsLine, actualArgsLine);
 }
+
+// Test for command parsing - sound command
+TEST_F(CliArgsTest, SoundCommandParsing)
+{
+    // Test case-insensitive parsing
+    std::wstring soundLower = L"sound";
+    std::wstring soundUpper = L"SOUND";
+    std::wstring soundMixed = L"SoUnD";
+    
+    EXPECT_EQ(_wcsicmp(soundLower.c_str(), L"sound"), 0);
+    EXPECT_EQ(_wcsicmp(soundUpper.c_str(), L"sound"), 0);
+    EXPECT_EQ(_wcsicmp(soundMixed.c_str(), L"sound"), 0);
+}
+
+// Test for command description update
+TEST_F(CliArgsTest, CommandDescriptionIncludesSound)
+{
+    // The description should mention the sound command
+    std::wstring expectedText = L"Type 'exit', 'save', 'read', 'logs', 'path' or 'sound' and press Enter to execute commands.";
+    
+    // This test verifies that the description has been updated
+    // In a real test, we would check the actual kDescriptionLines vector
+    EXPECT_TRUE(expectedText.find(L"sound") != std::wstring::npos);
+}

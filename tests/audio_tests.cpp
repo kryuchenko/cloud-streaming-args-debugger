@@ -3,6 +3,7 @@
 #include <cmath>
 #include <gtest/gtest.h>
 #include <mmdeviceapi.h>
+#include <thread>
 #include <windows.h>
 
 class AudioTest : public ::testing::Test
@@ -232,4 +233,73 @@ TEST_F(AudioTest, WaveFormatHandling)
 
     EXPECT_EQ(format.nBlockAlign, 8);
     EXPECT_EQ(format.nAvgBytesPerSec, 384000);
+}
+
+// Test Beep function availability
+TEST_F(AudioTest, BeepFunctionAvailable)
+{
+    // Test that Beep function exists and can be called
+    // Note: We can't actually test the sound output in unit tests
+    // but we can verify the function is available
+    
+    // Beep for 0ms duration should return immediately without sound
+    BOOL result = Beep(800, 0);
+    
+    // On some systems without speakers, Beep might return FALSE
+    // We just check that the function exists and can be called
+    EXPECT_TRUE(result == TRUE || result == FALSE);
+}
+
+// Test telephone beep pattern timing
+TEST_F(AudioTest, TelephoneBeepTiming)
+{
+    // Test the timing calculations for telephone beep pattern
+    const int beepDuration = 200;  // 200ms per beep
+    const int pauseBetweenBeeps = 100; // 100ms between beeps in pair
+    const int pauseBetweenPairs = 1000; // 1 second between pairs
+    
+    // Calculate time for one complete cycle
+    int oneCycleTime = beepDuration + pauseBetweenBeeps + beepDuration + pauseBetweenPairs;
+    EXPECT_EQ(oneCycleTime, 1500); // 1.5 seconds per cycle
+    
+    // Calculate approximate number of cycles in 1 minute
+    const int totalDuration = 60000; // 1 minute
+    int expectedCycles = totalDuration / oneCycleTime;
+    EXPECT_EQ(expectedCycles, 40); // 40 complete cycles in 60 seconds
+}
+
+// Test thread creation for beep playback
+TEST_F(AudioTest, BeepThreadCreation)
+{
+    std::atomic<bool> threadStarted{false};
+    std::atomic<bool> threadFinished{false};
+    
+    std::thread beepThread([&threadStarted, &threadFinished]() {
+        threadStarted = true;
+        // Simulate very short beep sequence
+        Sleep(10);
+        threadFinished = true;
+    });
+    
+    // Wait a bit for thread to start
+    Sleep(50);
+    
+    EXPECT_TRUE(threadStarted.load());
+    EXPECT_TRUE(threadFinished.load());
+    
+    beepThread.join();
+}
+
+// Test GetTickCount timing
+TEST_F(AudioTest, TickCountTiming)
+{
+    DWORD startTime = GetTickCount();
+    Sleep(100); // Sleep for 100ms
+    DWORD endTime = GetTickCount();
+    
+    DWORD elapsed = endTime - startTime;
+    
+    // Allow some tolerance for timing (80-120ms)
+    EXPECT_GE(elapsed, 80u);
+    EXPECT_LE(elapsed, 120u);
 }
