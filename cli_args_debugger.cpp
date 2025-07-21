@@ -602,7 +602,7 @@ void ArgumentDebuggerWindow::OnCharInput(wchar_t ch)
         else if (_wcsicmp(user_input_.c_str(), L"sound") == 0)
         {
             Log(L"Command: sound");
-            command_status_ = L"Playing telephone beeps for 1 minute...";
+            command_status_ = L"Playing low-frequency beeps (300Hz) for 1 minute...";
             PlayTelephoneBeeps();
         }
         else
@@ -1934,28 +1934,25 @@ void ArgumentDebuggerWindow::CalculatePathInfo()
     };
 }
 
-void ArgumentDebuggerWindow::PlayTelephoneBeeps()
+void ArgumentDebuggerWindow::PlayTelephoneBeeps()  // Name kept for compatibility
 {
     // Create a separate thread to play beeps so UI doesn't freeze
     std::thread beepThread([]() {
-        // Telephone-like beep pattern: 2 short beeps with pause, repeat for 1 minute
-        const int beepDuration = 500;  // 500ms per beep (longer beeps)
-        const int beepFrequency = 800; // 800Hz - typical telephone tone
-        const int pauseBetweenBeeps = 100; // 100ms between beeps in pair
-        const int pauseBetweenPairs = 1000; // 1 second between pairs
+        // Low-frequency continuous beep pattern
+        const int beepFrequency = 300;  // 300Hz - lower tone
+        const int beepDuration = 2000;  // 2 seconds beep
+        const int pauseDuration = 2000; // 2 seconds pause
         const int totalDuration = 60000; // 1 minute total
         
         DWORD startTime = GetTickCount();
         
         while (GetTickCount() - startTime < totalDuration)
         {
-            // First beep
+            // Single long beep
             Beep(beepFrequency, beepDuration);
-            Sleep(pauseBetweenBeeps);
             
-            // Second beep
-            Beep(beepFrequency, beepDuration);
-            Sleep(pauseBetweenPairs);
+            // Pause
+            Sleep(pauseDuration);
         }
     });
     

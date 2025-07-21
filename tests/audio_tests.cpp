@@ -243,29 +243,32 @@ TEST_F(AudioTest, BeepFunctionAvailable)
     // but we can verify the function is available
     
     // Beep for 0ms duration should return immediately without sound
-    BOOL result = Beep(800, 0);
+    BOOL result = Beep(300, 0);  // Using new 300Hz frequency
     
     // On some systems without speakers, Beep might return FALSE
     // We just check that the function exists and can be called
     EXPECT_TRUE(result == TRUE || result == FALSE);
 }
 
-// Test telephone beep pattern timing
-TEST_F(AudioTest, TelephoneBeepTiming)
+// Test low-frequency beep pattern timing
+TEST_F(AudioTest, LowFrequencyBeepTiming)
 {
-    // Test the timing calculations for telephone beep pattern
-    const int beepDuration = 500;  // 500ms per beep
-    const int pauseBetweenBeeps = 100; // 100ms between beeps in pair
-    const int pauseBetweenPairs = 1000; // 1 second between pairs
+    // Test the timing calculations for low-frequency beep pattern
+    const int beepFrequency = 300;  // 300Hz - lower tone
+    const int beepDuration = 2000;  // 2 seconds beep
+    const int pauseDuration = 2000; // 2 seconds pause
     
     // Calculate time for one complete cycle
-    int oneCycleTime = beepDuration + pauseBetweenBeeps + beepDuration + pauseBetweenPairs;
-    EXPECT_EQ(oneCycleTime, 2100); // 2.1 seconds per cycle
+    int oneCycleTime = beepDuration + pauseDuration;
+    EXPECT_EQ(oneCycleTime, 4000); // 4 seconds per cycle
     
     // Calculate approximate number of cycles in 1 minute
     const int totalDuration = 60000; // 1 minute
     int expectedCycles = totalDuration / oneCycleTime;
-    EXPECT_EQ(expectedCycles, 28); // 28 complete cycles in 60 seconds (with longer beeps)
+    EXPECT_EQ(expectedCycles, 15); // 15 complete cycles in 60 seconds
+    
+    // Verify frequency is lower than standard telephone tone
+    EXPECT_LT(beepFrequency, 425); // Lower than standard 425Hz
 }
 
 // Test thread creation for beep playback
