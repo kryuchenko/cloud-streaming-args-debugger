@@ -1,8 +1,8 @@
-# CLI Arguments Debugger
+# Cloud Streaming Args Debugger
 
-[![Build and Test](https://github.com/kryuchenko/directx-args-debugger/actions/workflows/build.yml/badge.svg)](https://github.com/kryuchenko/directx-args-debugger/actions/workflows/build.yml)
+[![Build and Test](https://github.com/kryuchenko/cloud-streaming-args-debugger/actions/workflows/build.yml/badge.svg)](https://github.com/kryuchenko/cloud-streaming-args-debugger/actions/workflows/build.yml)
 
-This is a simple Windows application that shows your command-line arguments in a full-screen window. It also displays a rotating 3D cube and a QR code that updates with the current timestamp, FPS, and the arguments you passed.
+This is a Windows application designed for debugging command-line arguments in cloud streaming environments. It displays arguments in a full-screen window with a rotating 3D cube and a QR code that updates with the current timestamp, FPS, and the arguments passed. Perfect for troubleshooting cloud gaming and streaming application launches.
 
 ## What It Does
 
@@ -15,7 +15,7 @@ This is a simple Windows application that shows your command-line arguments in a
 
 Check out a preview of the application:
 
-![CLI Arguments Debugger Screenshot](images/screenshot.jpg)
+![Cloud Streaming Args Debugger Screenshot](images/screenshot.jpg)
 
 ## How to Build
 
@@ -28,7 +28,7 @@ Check out a preview of the application:
 
 2. **Setup:**
    - Create a new C++ project in Visual Studio.
-   - Add `cli_args_debugger.cpp`, `qrcodegen.hpp`, and `qrcodegen.cpp` to your project.
+   - Add `cli_args_debugger.cpp`, `qrcodegen.hpp`, and `qrcodegen.cpp` to your project. (Note: The main source file retains its original name for compatibility)
    - Build the project (the code uses pragma directives to link the required DirectX libraries).
 
 3. **Command Line Build:**
@@ -78,7 +78,7 @@ Check out a preview of the application:
 
 - Run the compiled executable from a command prompt with any arguments you want:
   ```bat
-  cli_args_debugger.exe arg1 arg2 "another argument"
+  cloud-streaming-args-debugger.exe arg1 arg2 "another argument"
   ```
 
 - Commands in the application:

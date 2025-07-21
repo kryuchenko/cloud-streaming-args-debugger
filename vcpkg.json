@@ -1,5 +1,5 @@
 {
-    "name": "directx-args-debugger",
+    "name": "cloud-streaming-args-debugger",
     "version-string": "0.1.0",
     "dependencies": [
         "gtest"

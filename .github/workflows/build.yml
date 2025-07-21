@@ -31,17 +31,17 @@ jobs:
       run: |
         cl /EHsc /std:c++20 /permissive- /I. /DUNICODE /D_UNICODE ^
            cli_args_debugger.cpp seh_wrapper.cpp qrcodegen.cpp ^
-           /Fe:build\directx-args-debugger.exe ^
+           /Fe:build\cloud-streaming-args-debugger.exe ^
            /Fo:obj\ ^
            /link d3d11.lib d3dcompiler.lib d2d1.lib dwrite.lib ole32.lib avrt.lib user32.lib shell32.lib gdi32.lib propsys.lib
     - name: Package into zip
       shell: pwsh
       run: |
-        Compress-Archive -Path build\* -DestinationPath build\directx-args-debugger.zip -Force
+        Compress-Archive -Path build\* -DestinationPath build\cloud-streaming-args-debugger.zip -Force
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: directx-args-debugger-build
+        name: cloud-streaming-args-debugger-build
         path: build
     - name: Commit build folder
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -120,5 +120,5 @@ jobs:
     - name: Upload test artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: directx-args-debugger-tests
+        name: cloud-streaming-args-debugger-tests
         path: build/tests

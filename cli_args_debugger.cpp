@@ -95,7 +95,7 @@ using Microsoft::WRL::ComPtr;
 // ===========================================================================
 
 // Simple header-only logger that writes UTF-16 text to a file
-// located next to the executable (ArgumentDebugger.log).
+// located next to the executable (CloudStreamingArgsDebugger.log).
 //
 //  • InitLogger()   – call once from wWinMain right after COM is up.
 //  • Log(L"text")  – append one line with local‑time prefix.
@@ -119,7 +119,7 @@ void InitLogger()
     {
         g_logPath.assign(appdata_path);
         CoTaskMemFree(appdata_path);
-        g_logPath += L"\\ArgumentDebugger\\debug.log";
+        g_logPath += L"\\CloudStreamingArgsDebugger\\debug.log";
         std::wstring dir = g_logPath.substr(0, g_logPath.find_last_of(L"\\"));
         CreateDirectoryW(dir.c_str(), nullptr);
     }
@@ -131,7 +131,7 @@ void InitLogger()
         size_t pos = g_logPath.find_last_of(L"\\/");
         if (pos != std::wstring::npos)
             g_logPath.erase(pos + 1);
-        g_logPath += L"ArgumentDebugger.log";
+        g_logPath += L"CloudStreamingArgsDebugger.log";
     }
 
     // Open file in append mode with UTF-16LE encoding
@@ -232,12 +232,12 @@ std::string wstring_to_string(const std::wstring& wstr)
 
 #include "cli_args_display.hpp"
 
-constexpr const wchar_t* kWindowClassName = L"ArgumentDebuggerClass";
-constexpr const wchar_t* kWindowCaption = L"Argument Debugger";
+constexpr const wchar_t* kWindowClassName = L"CloudStreamingArgsDebuggerClass";
+constexpr const wchar_t* kWindowCaption = L"Cloud Streaming Args Debugger";
 
 // Description text for the window
 const std::vector<std::wstring> kDescriptionLines = {
-    L"Argument Debugger", L"This utility displays all command-line arguments in a full-screen window.",
+    L"Cloud Streaming Args Debugger", L"This utility displays all command-line arguments for cloud streaming applications.",
     L"Type 'exit', 'save', 'read', 'logs', 'path' or 'sound' and press Enter to execute commands."};
 
 constexpr float kMargin = 20.0f;
@@ -1722,7 +1722,7 @@ void ArgumentDebuggerWindow::ShowLogs()
     command_status_ = L"Log file loaded (last 100 lines).";
 }
 
-// Method for saving data (timestamp and FPS) to %APPDATA%\ArgumentDebugger\saved_data.txt
+// Method for saving data (timestamp and FPS) to %APPDATA%\CloudStreamingArgsDebugger\saved_data.txt
 void ArgumentDebuggerWindow::SaveData()
 {
     PWSTR appdata_path = nullptr;
@@ -1731,7 +1731,7 @@ void ArgumentDebuggerWindow::SaveData()
     {
         std::wstring folder_path = appdata_path;
         CoTaskMemFree(appdata_path);
-        folder_path += L"\\ArgumentDebugger";
+        folder_path += L"\\CloudStreamingArgsDebugger";
         // Create the directory if it does not exist yet.
         if (!CreateDirectoryW(folder_path.c_str(), nullptr))
         {
@@ -1768,7 +1768,7 @@ void ArgumentDebuggerWindow::SaveData()
     }
 }
 
-// Method for loading data from %APPDATA%\ArgumentDebugger\saved_data.txt
+// Method for loading data from %APPDATA%\CloudStreamingArgsDebugger\saved_data.txt
 void ArgumentDebuggerWindow::ReadData()
 {
     PWSTR appdata_path = nullptr;
@@ -1777,7 +1777,7 @@ void ArgumentDebuggerWindow::ReadData()
     {
         std::wstring folder_path = appdata_path;
         CoTaskMemFree(appdata_path);
-        folder_path += L"\\ArgumentDebugger";
+        folder_path += L"\\CloudStreamingArgsDebugger";
         std::wstring file_path = folder_path + L"\\saved_data.txt";
         FILE* file = nullptr;
         if (_wfopen_s(&file, file_path.c_str(), L"r, ccs=UTF-8") == 0 && file)
@@ -1915,7 +1915,7 @@ void ArgumentDebuggerWindow::CalculatePathInfo()
     {
         savePath = appdata_path;
         CoTaskMemFree(appdata_path);
-        savePath += L"\\ArgumentDebugger\\saved_data.txt";
+        savePath += L"\\CloudStreamingArgsDebugger\\saved_data.txt";
     }
 
     // Store all path information
