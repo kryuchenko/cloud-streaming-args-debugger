@@ -58,6 +58,9 @@
 #define _CRTDBG_MAP_ALLOC
 #include <crtdbg.h>
 #endif
+
+// Safe string functions for buffer overflow prevention
+#include <strsafe.h>
 #define INITGUID                           // Required by /permissive- for GUID initialization
 #include <functiondiscoverykeys_devpkey.h> // For PKEY_Device_FriendlyName
 #include <ks.h>                            // For GUID constants
@@ -546,7 +549,14 @@ int ArgumentDebuggerWindow::RunMessageLoop()
         }
         catch (const std::exception& ex)
         {
-            Log(L"Render error: " + std::wstring(ex.what(), ex.what() + strlen(ex.what())));
+            // Safe string conversion with bounds checking
+            size_t msgLen = strnlen_s(ex.what(), 1024);  // Limit to 1KB
+            std::wstring wideMsg;
+            if (msgLen > 0)
+            {
+                wideMsg = std::wstring(ex.what(), ex.what() + msgLen);
+            }
+            Log(L"Render error: " + wideMsg);
             MessageBoxA(window_handle_, ex.what(), "Render error", MB_ICONERROR);
             PostQuitMessage(1);
             break;

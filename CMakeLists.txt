@@ -46,6 +46,22 @@ if(MSVC)
         "UNICODE" 
         "_UNICODE"
     )
+    
+    # Enable runtime checks and sanitizers in Debug builds
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        # Runtime error checks
+        target_compile_options(cloud-streaming-args-debugger PRIVATE 
+            "/RTC1"      # Enable runtime checks
+            "/GS"        # Buffer security check
+            "/sdl"       # Enable additional security checks
+        )
+        
+        # AddressSanitizer for MSVC (requires VS 2019 16.9+)
+        if(ENABLE_ASAN)
+            target_compile_options(cloud-streaming-args-debugger PRIVATE "/fsanitize=address")
+            target_link_options(cloud-streaming-args-debugger PRIVATE "/fsanitize=address")
+        endif()
+    endif()
 endif()
 
 # Installation (optional)

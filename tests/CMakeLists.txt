@@ -27,6 +27,8 @@ set(TEST_SOURCES
     string_conversion_tests.cpp
     seh_exception_tests.cpp
     fps_calculation_tests.cpp
+    memory_safety_tests.cpp
+    buffer_safety_tests.cpp
 )
 
 # Add source files from parent directory that contain functions we're testing
@@ -50,11 +52,22 @@ target_link_libraries(cli_args_tests PRIVATE
     dwrite   # For DirectWrite
     dxgi     # For DXGI
     avrt     # For AvSetMmThreadCharacteristics
+    winmm    # For multimedia functions
+    psapi    # For GetProcessMemoryInfo
 )
 
 # Windows-specific compiler options
 if(MSVC)
     target_compile_options(cli_args_tests PRIVATE "/EHsc")
+    
+    # Enable additional security checks in debug builds
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        target_compile_options(cli_args_tests PRIVATE 
+            "/RTC1"      # Runtime checks
+            "/GS"        # Buffer security check
+            "/sdl"       # Additional security checks
+        )
+    endif()
     
     # Explicitly specify UNICODE and exclude main from cli_args_debugger.cpp
     target_compile_definitions(cli_args_tests PRIVATE 
