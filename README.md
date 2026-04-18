@@ -40,7 +40,7 @@ Check out a preview of the application:
 
    # Compile with MSVC
    cl /EHsc /std:c++20 /permissive- /I. /DUNICODE /D_UNICODE ^
-      cli_args_debugger.cpp log_manager.cpp seh_wrapper.cpp qrcodegen.cpp ^
+      cli_args_debugger.cpp log_manager.cpp path_info.cpp seh_wrapper.cpp qrcodegen.cpp ^
       /Fe:build/ArgumentDebugger.exe ^
       /Fo:build/ ^
       /link d3d11.lib d3dcompiler.lib d2d1.lib dwrite.lib ole32.lib avrt.lib user32.lib shell32.lib gdi32.lib propsys.lib

@@ -36,6 +36,7 @@ set(PARENT_SOURCES
     ../qrcodegen.cpp
     ../cli_args_debugger.cpp
     ../log_manager.cpp
+    ../path_info.cpp
     ../seh_wrapper.cpp
 )
 

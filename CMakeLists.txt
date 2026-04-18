@@ -17,6 +17,7 @@ add_executable(cloud-streaming-args-debugger
     WIN32                        # Specify that the application uses WinMain instead of main
     cli_args_debugger.cpp
     log_manager.cpp
+    path_info.cpp
     seh_wrapper.cpp
     qrcodegen.cpp                # Include QR code generator
 )
