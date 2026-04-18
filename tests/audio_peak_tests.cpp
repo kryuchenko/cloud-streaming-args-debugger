@@ -2,6 +2,12 @@
 // require a live microphone — they operate on in-memory byte buffers — so
 // they're safe to run in CI on any Windows build agent.
 
+// NOMINMAX suppresses the min()/max() macros in <windows.h>; without it,
+// std::numeric_limits<int16_t>::min() below expands into garbage under MSVC.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 // clang-format off
 #include <windows.h>
 #include <mmreg.h>
