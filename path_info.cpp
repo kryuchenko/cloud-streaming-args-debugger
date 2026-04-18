@@ -3,10 +3,14 @@
 #define _UNICODE
 #endif
 
+// clang-format off
+// <windows.h> must come first; <knownfolders.h> and <winternl.h> rely on
+// EXTERN_C / GUID being already defined.
+#include <windows.h>
 #include <knownfolders.h>
 #include <shlobj.h>
-#include <windows.h>
 #include <winternl.h>
+// clang-format on
 
 #include "path_info.hpp"
 
