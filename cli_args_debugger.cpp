@@ -89,6 +89,10 @@
 #include "qrcodegen.hpp"
 using qrcodegen::QrCode;
 
+// Logger lives in log_manager.{hpp,cpp} so multiple translation units (tests,
+// seh_wrapper) can link against the same instance.
+#include "log_manager.hpp"
+
 // Use Microsoft::WRL::ComPtr for COM object management
 using Microsoft::WRL::ComPtr;
 
@@ -100,129 +104,6 @@ using Microsoft::WRL::ComPtr;
         if (FAILED(hr))                                                                                                \
             throw std::runtime_error(msg);                                                                             \
     } while (0)
-
-// ===========================================================================
-//  LOGGING SUPPORT
-// ===========================================================================
-
-// Simple header-only logger that writes UTF-16 text to a file
-// located next to the executable (CloudStreamingArgsDebugger.log).
-//
-//  • InitLogger()   – call once from wWinMain right after COM is up.
-//  • Log(L"text")  – append one line with local‑time prefix.
-//  • ShowLogs()    – read the file and place it into loaded_data_ so it is
-//                    rendered in the right‑upper corner (triggered via "logs")
-
-// Global variables for logging (exported for tests)
-FILE* g_log_file = nullptr; // File handle for the log file
-std::wstring g_logPath;     // Path to the log file
-
-namespace // anonymous, internal
-{
-CRITICAL_SECTION g_log_cs;  // Critical section for thread safety
-} // namespace
-
-void InitLogger()
-{
-    PWSTR appdata_path = nullptr;
-    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
-    if (SUCCEEDED(hr))
-    {
-        g_logPath.assign(appdata_path);
-        CoTaskMemFree(appdata_path);
-        g_logPath += L"\\CloudStreamingArgsDebugger\\debug.log";
-        std::wstring dir = g_logPath.substr(0, g_logPath.find_last_of(L"\\"));
-        CreateDirectoryW(dir.c_str(), nullptr);
-    }
-    else
-    {
-        wchar_t exePath[MAX_PATH] = L"\0";
-        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-        g_logPath.assign(exePath);
-        size_t pos = g_logPath.find_last_of(L"\\/");
-        if (pos != std::wstring::npos)
-            g_logPath.erase(pos + 1);
-        g_logPath += L"CloudStreamingArgsDebugger.log";
-    }
-
-    // Open file in append mode with UTF-16LE encoding
-    // Use _SH_DENYNO to allow other handles to read the file while we have it open
-    g_log_file = _wfsopen(g_logPath.c_str(), L"a+, ccs=UTF-16LE", _SH_DENYNO);
-
-    // If this is a new file, write BOM (Byte Order Mark)
-    if (g_log_file && ftell(g_log_file) == 0)
-    {
-        fputwc(0xFEFF, g_log_file); // UTF-16LE BOM
-    }
-
-    // Initialize critical section for thread-safe logging
-    InitializeCriticalSection(&g_log_cs);
-}
-
-void Log(const std::wstring& text)
-{
-    if (!g_log_file)
-        return;
-
-    // Lock the critical section before accessing the file
-    EnterCriticalSection(&g_log_cs);
-
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-
-    // Format log entry with timestamp
-    std::wstring entry = L"[";
-    entry += std::to_wstring(st.wYear) + L"-";
-
-    // Month with padding
-    if (st.wMonth < 10)
-        entry += L"0";
-    entry += std::to_wstring(st.wMonth) + L"-";
-
-    // Day with padding
-    if (st.wDay < 10)
-        entry += L"0";
-    entry += std::to_wstring(st.wDay) + L" ";
-
-    // Hour with padding
-    if (st.wHour < 10)
-        entry += L"0";
-    entry += std::to_wstring(st.wHour) + L":";
-
-    // Minute with padding
-    if (st.wMinute < 10)
-        entry += L"0";
-    entry += std::to_wstring(st.wMinute) + L":";
-
-    // Second with padding
-    if (st.wSecond < 10)
-        entry += L"0";
-    entry += std::to_wstring(st.wSecond) + L"] ";
-
-    // Add the actual log message
-    entry += text + L"\n";
-
-    // Write to file and flush
-    fputws(entry.c_str(), g_log_file);
-    fflush(g_log_file);
-
-    // Unlock the critical section
-    LeaveCriticalSection(&g_log_cs);
-}
-
-// Simple log function for SEH wrapper to use
-// Exported for seh_wrapper.cpp
-void LogSEH(const wchar_t* message)
-{
-    if (message)
-    {
-        // Convert C-string to wstring for main Log function
-        Log(std::wstring(message));
-        // Also output to debug console for immediate visibility
-        OutputDebugStringW(message);
-        OutputDebugStringW(L"\n");
-    }
-}
 
 // Helper function: robust conversion from std::wstring to std::string using WideCharToMultiByte (UTF-8)
 std::string wstring_to_string(const std::wstring& wstr)
@@ -450,35 +331,17 @@ int WINAPI wWinMain(HINSTANCE h_instance, HINSTANCE, PWSTR, int cmd_show)
         Log(L"Application exit, code = " + std::to_wstring(exit_code));
         Log(L"wWinMain: leaving, exitCode=" + std::to_wstring(exit_code));
 
-        // Close the log file and delete critical section
-        if (g_log_file)
-        {
-            fclose(g_log_file);
-            g_log_file = nullptr;
-        }
-
-        // Delete critical section
-        DeleteCriticalSection(&g_log_cs);
-
+        CloseLogger();
         CoUninitialize();
         return exit_code;
     }
     catch (const std::exception& ex)
     {
-        // Convert char* to wstring for logging
         std::wstring wstr(ex.what(), ex.what() + strlen(ex.what()));
         Log(L"Unhandled C++ exception");
         Log(L"FATAL: " + wstr);
 
-        // Close log file before exit
-        if (g_log_file)
-        {
-            fclose(g_log_file);
-            g_log_file = nullptr;
-        }
-
-        // Delete critical section in exception case as well
-        DeleteCriticalSection(&g_log_cs);
+        CloseLogger();
 
         MessageBoxA(nullptr, ex.what(), "Initialization Error", MB_OK | MB_ICONERROR);
         return -1;

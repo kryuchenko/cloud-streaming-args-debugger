@@ -29,3 +29,6 @@ cmake_install.cmake
 # QR Code generator source files (downloaded during build)
 qrcodegen.cpp
 qrcodegen.hpp
+
+# Local static-analysis artifacts
+/.analysis/

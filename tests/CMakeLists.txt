@@ -35,6 +35,7 @@ set(TEST_SOURCES
 set(PARENT_SOURCES
     ../qrcodegen.cpp
     ../cli_args_debugger.cpp
+    ../log_manager.cpp
     ../seh_wrapper.cpp
 )
 
