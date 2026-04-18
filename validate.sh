@@ -19,7 +19,7 @@ echo "🔍 Checking for common C++ syntax issues..."
 # Check for missing semicolons, unmatched braces, etc.
 syntax_errors=0
 
-for file in cli_args_debugger.cpp seh_wrapper.cpp log_manager.cpp; do
+for file in cli_args_debugger.cpp seh_wrapper.cpp log_manager.cpp path_info.cpp; do
     if [ -f "$file" ]; then
         echo "Checking $file..."
         
