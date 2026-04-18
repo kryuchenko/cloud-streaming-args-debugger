@@ -30,7 +30,9 @@ template <typename Fill> std::wstring FillWithGrowingBuffer(Fill fill)
     for (int attempt = 0; attempt < 6; ++attempt)
     {
         SetLastError(ERROR_SUCCESS);
-        DWORD len = fill(buf.data(), static_cast<DWORD>(buf.size()));
+        // `&buf[0]` yields `wchar_t*` in both C++17 and C++20; `buf.data()`
+        // would only do so in C++20. Tests compile with C++17.
+        DWORD len = fill(&buf[0], static_cast<DWORD>(buf.size()));
         if (len == 0)
             return {};
         if (len < buf.size())
@@ -56,7 +58,7 @@ template <typename Query> std::wstring FillWithQueriedSize(Query query)
     if (!needed)
         return {};
     std::wstring buf(needed, L'\0');
-    DWORD got = query(needed, buf.data());
+    DWORD got = query(needed, &buf[0]);
     if (got == 0 || got > needed)
         return {};
     buf.resize(got);
@@ -137,7 +139,7 @@ std::wstring WineOrProtonVersion()
         return L"Not detected";
 
     std::wstring wversion(size_needed - 1, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, version, -1, wversion.data(), size_needed);
+    MultiByteToWideChar(CP_UTF8, 0, version, -1, &wversion[0], size_needed);
 
     wchar_t protonBuf[1024]{};
     if (GetEnvironmentVariableW(L"PROTON_VERSION", protonBuf, 1024) > 0)
