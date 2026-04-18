@@ -24,6 +24,7 @@ set(TEST_SOURCES
     path_utils_tests.cpp
     qr_code_tests.cpp
     audio_tests.cpp
+    audio_peak_tests.cpp
     logging_tests.cpp
     data_persistence_tests.cpp
     string_conversion_tests.cpp
@@ -31,6 +32,7 @@ set(TEST_SOURCES
     fps_calculation_tests.cpp
     memory_safety_tests.cpp
     buffer_safety_tests.cpp
+    path_info_tests.cpp
 )
 
 # Add source files from parent directory that contain functions we're testing

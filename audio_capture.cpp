@@ -30,9 +30,6 @@ using Microsoft::WRL::ComPtr;
 // back to AudioCapture::ThreadMain via static_cast on the parameter.
 extern "C" DWORD WINAPI RawAudioThreadWithSEH(LPVOID param) noexcept;
 
-namespace
-{
-
 // Helper for DX_CALL-style throw on HRESULT failure. Duplicates the macro
 // from cli_args_debugger.cpp to keep this TU independent.
 #define AC_CALL(expr, msg)                                                                                             \
@@ -43,12 +40,8 @@ namespace
             throw std::runtime_error(msg);                                                                             \
     } while (0)
 
-struct SampleFormat
+namespace audio_capture::detail
 {
-    WORD tag;
-    WORD bps;
-    UINT32 channels;
-};
 
 // Resolve tag / bits-per-sample for WAVEFORMATEXTENSIBLE, falling back to
 // the base WAVEFORMATEX fields for plain PCM/IEEE_FLOAT streams.
@@ -163,7 +156,7 @@ float PeakForFormat(const SampleFormat& sf, const BYTE* data, UINT32 total_sampl
     return 0.f;
 }
 
-} // namespace
+} // namespace audio_capture::detail
 
 AudioCapture::~AudioCapture()
 {
@@ -420,6 +413,7 @@ float AudioCapture::ComputePeak(const BYTE* data, UINT32 frames, DWORD flags) co
     if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) || !data || !mix_format_)
         return 0.f;
 
+    using namespace audio_capture::detail;
     const SampleFormat sf = ResolveFormat(mix_format_);
 
     UINT64 total64 = static_cast<UINT64>(frames) * static_cast<UINT64>(sf.channels);

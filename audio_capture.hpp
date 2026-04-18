@@ -72,3 +72,25 @@ class AudioCapture
     std::atomic<bool> thread_running_{false};
     std::wstring mic_name_;
 };
+
+// Pure DSP helpers. Deliberately exposed so unit tests can exercise them
+// without bringing up a real WASAPI capture session.
+namespace audio_capture::detail
+{
+
+struct SampleFormat
+{
+    WORD tag;
+    WORD bps;
+    UINT32 channels;
+};
+
+SampleFormat ResolveFormat(const WAVEFORMATEX* mix);
+
+float PeakFloat32(const BYTE* data, UINT32 total_samples);
+float PeakPcm16(const BYTE* data, UINT32 total_samples);
+float PeakPcm24(const BYTE* data, UINT32 total_samples);
+float PeakPcm32(const BYTE* data, UINT32 total_samples);
+float PeakForFormat(const SampleFormat& sf, const BYTE* data, UINT32 total_samples);
+
+} // namespace audio_capture::detail
