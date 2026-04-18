@@ -41,7 +41,9 @@
 #include <iomanip> // For setw/setfill
 #include <knownfolders.h>
 #include <mmdeviceapi.h>
-#include <share.h> // For _wfsopen share flags
+#include <mmsystem.h> // For PlaySound
+#include <psapi.h>    // For GetProcessMemoryInfo
+#include <share.h>    // For _wfsopen share flags
 #include <shlobj.h>
 #include <sstream>
 #include <stdexcept>
@@ -49,9 +51,7 @@
 #include <thread>
 #include <vector>
 #include <windows.h>
-#include <mmsystem.h>  // For PlaySound
 #include <wrl/client.h>
-#include <psapi.h>  // For GetProcessMemoryInfo
 
 // Debug memory leak detection
 #ifdef _DEBUG
@@ -89,6 +89,17 @@
 #include "qrcodegen.hpp"
 using qrcodegen::QrCode;
 
+// Logger lives in log_manager.{hpp,cpp} so multiple translation units (tests,
+// seh_wrapper) can link against the same instance.
+#include "log_manager.hpp"
+
+// Path/env inspection (executable path, OS version, Wine/Proton, etc.)
+#include "path_info.hpp"
+
+// WASAPI microphone capture (owns its own thread, COM objects, and level
+// smoothing). See audio_capture.hpp for the public contract.
+#include "audio_capture.hpp"
+
 // Use Microsoft::WRL::ComPtr for COM object management
 using Microsoft::WRL::ComPtr;
 
@@ -100,129 +111,6 @@ using Microsoft::WRL::ComPtr;
         if (FAILED(hr))                                                                                                \
             throw std::runtime_error(msg);                                                                             \
     } while (0)
-
-// ===========================================================================
-//  LOGGING SUPPORT
-// ===========================================================================
-
-// Simple header-only logger that writes UTF-16 text to a file
-// located next to the executable (CloudStreamingArgsDebugger.log).
-//
-//  • InitLogger()   – call once from wWinMain right after COM is up.
-//  • Log(L"text")  – append one line with local‑time prefix.
-//  • ShowLogs()    – read the file and place it into loaded_data_ so it is
-//                    rendered in the right‑upper corner (triggered via "logs")
-
-// Global variables for logging (exported for tests)
-FILE* g_log_file = nullptr; // File handle for the log file
-std::wstring g_logPath;     // Path to the log file
-
-namespace // anonymous, internal
-{
-CRITICAL_SECTION g_log_cs;  // Critical section for thread safety
-} // namespace
-
-void InitLogger()
-{
-    PWSTR appdata_path = nullptr;
-    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
-    if (SUCCEEDED(hr))
-    {
-        g_logPath.assign(appdata_path);
-        CoTaskMemFree(appdata_path);
-        g_logPath += L"\\CloudStreamingArgsDebugger\\debug.log";
-        std::wstring dir = g_logPath.substr(0, g_logPath.find_last_of(L"\\"));
-        CreateDirectoryW(dir.c_str(), nullptr);
-    }
-    else
-    {
-        wchar_t exePath[MAX_PATH] = L"\0";
-        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-        g_logPath.assign(exePath);
-        size_t pos = g_logPath.find_last_of(L"\\/");
-        if (pos != std::wstring::npos)
-            g_logPath.erase(pos + 1);
-        g_logPath += L"CloudStreamingArgsDebugger.log";
-    }
-
-    // Open file in append mode with UTF-16LE encoding
-    // Use _SH_DENYNO to allow other handles to read the file while we have it open
-    g_log_file = _wfsopen(g_logPath.c_str(), L"a+, ccs=UTF-16LE", _SH_DENYNO);
-
-    // If this is a new file, write BOM (Byte Order Mark)
-    if (g_log_file && ftell(g_log_file) == 0)
-    {
-        fputwc(0xFEFF, g_log_file); // UTF-16LE BOM
-    }
-
-    // Initialize critical section for thread-safe logging
-    InitializeCriticalSection(&g_log_cs);
-}
-
-void Log(const std::wstring& text)
-{
-    if (!g_log_file)
-        return;
-
-    // Lock the critical section before accessing the file
-    EnterCriticalSection(&g_log_cs);
-
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-
-    // Format log entry with timestamp
-    std::wstring entry = L"[";
-    entry += std::to_wstring(st.wYear) + L"-";
-
-    // Month with padding
-    if (st.wMonth < 10)
-        entry += L"0";
-    entry += std::to_wstring(st.wMonth) + L"-";
-
-    // Day with padding
-    if (st.wDay < 10)
-        entry += L"0";
-    entry += std::to_wstring(st.wDay) + L" ";
-
-    // Hour with padding
-    if (st.wHour < 10)
-        entry += L"0";
-    entry += std::to_wstring(st.wHour) + L":";
-
-    // Minute with padding
-    if (st.wMinute < 10)
-        entry += L"0";
-    entry += std::to_wstring(st.wMinute) + L":";
-
-    // Second with padding
-    if (st.wSecond < 10)
-        entry += L"0";
-    entry += std::to_wstring(st.wSecond) + L"] ";
-
-    // Add the actual log message
-    entry += text + L"\n";
-
-    // Write to file and flush
-    fputws(entry.c_str(), g_log_file);
-    fflush(g_log_file);
-
-    // Unlock the critical section
-    LeaveCriticalSection(&g_log_cs);
-}
-
-// Simple log function for SEH wrapper to use
-// Exported for seh_wrapper.cpp
-void LogSEH(const wchar_t* message)
-{
-    if (message)
-    {
-        // Convert C-string to wstring for main Log function
-        Log(std::wstring(message));
-        // Also output to debug console for immediate visibility
-        OutputDebugStringW(message);
-        OutputDebugStringW(L"\n");
-    }
-}
 
 // Helper function: robust conversion from std::wstring to std::string using WideCharToMultiByte (UTF-8)
 std::string wstring_to_string(const std::wstring& wstr)
@@ -248,7 +136,8 @@ constexpr const wchar_t* kWindowCaption = L"Cloud Streaming Args Debugger";
 
 // Description text for the window
 const std::vector<std::wstring> kDescriptionLines = {
-    L"Cloud Streaming Args Debugger", L"This utility displays all command-line arguments for cloud streaming applications.",
+    L"Cloud Streaming Args Debugger",
+    L"This utility displays all command-line arguments for cloud streaming applications.",
     L"Type 'exit', 'save', 'read', 'logs', 'path', 'sound' or 'memory' and press Enter to execute commands."};
 
 constexpr float kMargin = 20.0f;
@@ -271,8 +160,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 ArgumentDebuggerWindow* g_app_instance = nullptr;
 
 // External SEH wrapper function (defined in seh_wrapper.cpp)
-extern "C" DWORD WINAPI RawAudioThreadWithSEH(LPVOID param) noexcept;
-
 // Global function for unhandled exception filter - renamed to avoid conflict
 LONG WINAPI AppUnhandledExceptionFilter(EXCEPTION_POINTERS* ep)
 {
@@ -299,9 +186,6 @@ class ArgumentDebuggerWindow
         return is_running_;
     }
 
-    // Thread implementation with C++ exception handling - public for thread access
-    DWORD AudioCaptureThreadImpl(LPVOID param);
-
   private:
     void InitializeWindow(HINSTANCE h_instance, int cmd_show);
     void InitializeDevice();
@@ -309,14 +193,24 @@ class ArgumentDebuggerWindow
     void CreateRenderTargetView();
     void CreateD2DResources();
     void CreateShadersAndGeometry();
-    void InitializeMicrophone();
-    void PollMicrophone();
     void RenderFrame();
     void Cleanup();
     void UpdateRotation(float delta_time);
 
-    // Audio capture thread function with correct calling convention and SEH wrapper
-    static __declspec(nothrow) DWORD WINAPI AudioCaptureThread(LPVOID param);
+    // RenderFrame is split into small section methods. RenderFrame itself just
+    // orchestrates the sequence; each helper owns one visible region of the UI.
+    void UpdateFrameTiming();
+    void RenderCube(const D3D11_VIEWPORT& vp);
+    void RenderTextHud(const D2D1_SIZE_F& size, float& y_pos);
+    void RenderLoadedDataPanel(const D2D1_SIZE_F& size);
+    void RenderPathsPanel(const D2D1_SIZE_F& size);
+    void RenderInputPrompt(const D2D1_SIZE_F& size);
+    void RenderQrBitmap(const D2D1_SIZE_F& size);
+    void RenderVolumeMeter(const D2D1_SIZE_F& size);
+    // Returns false if the D2D device was lost and has been recreated; in that
+    // case the caller should skip Present and move on to the next frame.
+    bool EndOverlay();
+    void PresentFrame();
 
   private:
     // Update QR code – here we add the FPS synchronization logic.
@@ -328,13 +222,13 @@ class ArgumentDebuggerWindow
 
     // Helper to load entire log file into loaded_data_
     void ShowLogs();
-    
+
     // Helper to calculate and cache path information once
     void CalculatePathInfo();
-    
+
     // Play telephone-like beeps for 1 minute
     void PlayTelephoneBeeps();
-    
+
     // Show memory usage statistics
     void ShowMemoryStats();
 
@@ -349,9 +243,9 @@ class ArgumentDebuggerWindow
     std::wstring command_status_;
     std::wstring loaded_data_;
     std::wstring loaded_data_title_; // Title for the loaded data section
-    bool show_paths_ = false; // Flag to control file paths display
-    bool show_logs_ = false; // Flag to control logs display
-    
+    bool show_paths_ = false;        // Flag to control file paths display
+    bool show_logs_ = false;         // Flag to control logs display
+
     // Cached path information to avoid expensive system calls every frame
     std::vector<std::pair<std::wstring, std::wstring>> cached_path_items_;
 
@@ -370,8 +264,8 @@ class ArgumentDebuggerWindow
     ComPtr<IDWriteFactory> dwrite_factory_;
     ComPtr<IDWriteTextFormat> text_format_;
     ComPtr<IDWriteTextFormat> small_text_format_; // Smaller font for logs
-    ComPtr<IDWriteTextFormat> data_text_format_; // Medium font for loaded data
-    
+    ComPtr<IDWriteTextFormat> data_text_format_;  // Medium font for loaded data
+
     // D2D Brushes - created once and reused
     ComPtr<ID2D1SolidColorBrush> white_brush_;
     ComPtr<ID2D1SolidColorBrush> green_brush_;
@@ -392,17 +286,7 @@ class ArgumentDebuggerWindow
     ComPtr<ID3D11PixelShader> pixel_shader_;
 
     // WASAPI
-    ComPtr<IMMDeviceEnumerator> device_enumerator_;
-    ComPtr<IMMDevice> capture_device_;
-    ComPtr<IAudioClient> audio_client_;
-    ComPtr<IAudioCaptureClient> capture_client_;
-    WAVEFORMATEX* mix_format_ = nullptr;
-    HANDLE audio_event_ = nullptr;
-    HANDLE audio_thread_ = nullptr;
-    std::atomic<float> mic_level_{0.f}; // 0..1
-    std::atomic<bool> mic_available_{false};
-    std::atomic<bool> audio_thread_running_{false}; // Flag for safe thread termination
-    std::wstring mic_name_;                         // FriendlyName ("USB Mic (Realtek ...)")
+    AudioCapture audio_capture_; // Owns the WASAPI pipeline and capture thread
 };
 
 #ifndef EXCLUDE_MAIN
@@ -450,35 +334,17 @@ int WINAPI wWinMain(HINSTANCE h_instance, HINSTANCE, PWSTR, int cmd_show)
         Log(L"Application exit, code = " + std::to_wstring(exit_code));
         Log(L"wWinMain: leaving, exitCode=" + std::to_wstring(exit_code));
 
-        // Close the log file and delete critical section
-        if (g_log_file)
-        {
-            fclose(g_log_file);
-            g_log_file = nullptr;
-        }
-
-        // Delete critical section
-        DeleteCriticalSection(&g_log_cs);
-
+        CloseLogger();
         CoUninitialize();
         return exit_code;
     }
     catch (const std::exception& ex)
     {
-        // Convert char* to wstring for logging
         std::wstring wstr(ex.what(), ex.what() + strlen(ex.what()));
         Log(L"Unhandled C++ exception");
         Log(L"FATAL: " + wstr);
 
-        // Close log file before exit
-        if (g_log_file)
-        {
-            fclose(g_log_file);
-            g_log_file = nullptr;
-        }
-
-        // Delete critical section in exception case as well
-        DeleteCriticalSection(&g_log_cs);
+        CloseLogger();
 
         MessageBoxA(nullptr, ex.what(), "Initialization Error", MB_OK | MB_ICONERROR);
         return -1;
@@ -531,7 +397,7 @@ int ArgumentDebuggerWindow::RunMessageLoop()
         static ULONGLONG lastFrameTime = 0;
         ULONGLONG currentFrameTime = GetTickCount64();
         const ULONGLONG targetFrameTime = 16; // ~60 FPS (1000ms / 60 = 16.67ms)
-        
+
         if (currentFrameTime - lastFrameTime < targetFrameTime)
         {
             // Sleep to maintain target frame rate
@@ -550,7 +416,7 @@ int ArgumentDebuggerWindow::RunMessageLoop()
         catch (const std::exception& ex)
         {
             // Safe string conversion with bounds checking
-            size_t msgLen = strnlen_s(ex.what(), 1024);  // Limit to 1KB
+            size_t msgLen = strnlen_s(ex.what(), 1024); // Limit to 1KB
             std::wstring wideMsg;
             if (msgLen > 0)
             {
@@ -666,33 +532,9 @@ void ArgumentDebuggerWindow::OnDestroy()
 {
     Log(L"Window destroy event");
 
-    // 1. Signal threads to exit via atomic flags
     is_running_ = false;
-    audio_thread_running_.store(false);
-
-    // Wake up audio thread if waiting
-    if (audio_event_)
-        SetEvent(audio_event_);
-
-    // 2. Wait for thread completion with timeout to prevent hanging
-    if (audio_thread_)
-    {
-        DWORD wait_result = WaitForSingleObject(audio_thread_, 5000);  // 5 second timeout
-        if (wait_result == WAIT_TIMEOUT)
-        {
-            Log(L"WARNING: Audio thread did not terminate gracefully, forcing termination");
-            TerminateThread(audio_thread_, 0);
-        }
-        CloseHandle(audio_thread_);
-        audio_thread_ = nullptr;
-    }
-    if (audio_event_)
-    { // Close event handle
-        CloseHandle(audio_event_);
-        audio_event_ = nullptr;
-    }
-
-    Cleanup(); // 3. Now safely release COM objects
+    audio_capture_.Stop();
+    Cleanup();
     PostQuitMessage(0);
 }
 
@@ -734,7 +576,7 @@ void ArgumentDebuggerWindow::InitializeDevice()
     CreateRenderTargetView();
     CreateD2DResources();
     CreateShadersAndGeometry();
-    InitializeMicrophone();
+    audio_capture_.Initialize();
 }
 
 void ArgumentDebuggerWindow::CreateDeviceAndSwapChain(UINT width, UINT height)
@@ -811,7 +653,7 @@ void ArgumentDebuggerWindow::CreateD2DResources()
     small_text_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
     // Use trailing alignment for device name text to align to the right
     small_text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-    
+
     // Create a medium text format for loaded data (double the size of small font)
     DX_CALL(dwrite_factory_->CreateTextFormat(L"Consolas", nullptr, // Using monospaced font for data
                                               DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -822,7 +664,7 @@ void ArgumentDebuggerWindow::CreateD2DResources()
     data_text_format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     data_text_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
     data_text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    
+
     // Create brushes once during initialization
     DX_CALL(d2d_render_target_->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), white_brush_.GetAddressOf()),
             "Failed to create white brush.");
@@ -982,29 +824,48 @@ void ArgumentDebuggerWindow::UpdateQrCode(ULONGLONG current_time)
 
 void ArgumentDebuggerWindow::RenderFrame()
 {
-    ULONGLONG current_time = GetTickCount64();
-    float delta_time = (current_time - last_time_) / 1000.0f;
-    last_time_ = current_time;
-
-    // Update the instantaneous FPS
-    current_fps_ = (delta_time > 0.0f) ? (1.0f / delta_time) : 0.0f;
-
-    UpdateRotation(delta_time);
-
-    // Clear the D3D render target
-    FLOAT clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    immediate_context_->ClearRenderTargetView(d3d_render_target_view_.Get(), clear_color);
-    immediate_context_->OMSetRenderTargets(1, d3d_render_target_view_.GetAddressOf(), nullptr);
+    UpdateFrameTiming();
 
     RECT rc;
     GetClientRect(window_handle_, &rc);
-    D3D11_VIEWPORT vp;
+    D3D11_VIEWPORT vp{};
     vp.Width = static_cast<float>(rc.right - rc.left);
     vp.Height = static_cast<float>(rc.bottom - rc.top);
-    vp.MinDepth = 0.0f;
     vp.MaxDepth = 1.0f;
-    vp.TopLeftX = 0.0f;
-    vp.TopLeftY = 0.0f;
+    RenderCube(vp);
+
+    d2d_render_target_->BeginDraw();
+    UpdateQrCode(GetTickCount64());
+
+    const D2D1_SIZE_F size = d2d_render_target_->GetSize();
+    float y_pos = kMargin;
+    RenderTextHud(size, y_pos);
+    RenderLoadedDataPanel(size);
+    RenderPathsPanel(size);
+    RenderInputPrompt(size);
+    RenderQrBitmap(size);
+    RenderVolumeMeter(size);
+
+    if (!EndOverlay()) // device lost → D2D resources already recreated
+        return;
+
+    PresentFrame();
+}
+
+void ArgumentDebuggerWindow::UpdateFrameTiming()
+{
+    ULONGLONG current_time = GetTickCount64();
+    float delta_time = (current_time - last_time_) / 1000.0f;
+    last_time_ = current_time;
+    current_fps_ = (delta_time > 0.0f) ? (1.0f / delta_time) : 0.0f;
+    UpdateRotation(delta_time);
+}
+
+void ArgumentDebuggerWindow::RenderCube(const D3D11_VIEWPORT& vp)
+{
+    FLOAT clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    immediate_context_->ClearRenderTargetView(d3d_render_target_view_.Get(), clear_color);
+    immediate_context_->OMSetRenderTargets(1, d3d_render_target_view_.GetAddressOf(), nullptr);
     immediate_context_->RSSetViewports(1, &vp);
 
     UINT stride = sizeof(SimpleVertex);
@@ -1018,7 +879,6 @@ void ArgumentDebuggerWindow::RenderFrame()
     XMVECTOR eye = XMVectorSet(0.0f, 2.0f, -5.0f, 0.0f);
     XMVECTOR at = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
     XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-
     XMMATRIX view = XMMatrixLookAtLH(eye, at, up);
     XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV4, vp.Width / vp.Height, 0.01f, 100.0f);
 
@@ -1029,19 +889,11 @@ void ArgumentDebuggerWindow::RenderFrame()
     immediate_context_->VSSetShader(vertex_shader_.Get(), nullptr, 0);
     immediate_context_->VSSetConstantBuffers(0, 1, constant_buffer_.GetAddressOf());
     immediate_context_->PSSetShader(pixel_shader_.Get(), nullptr, 0);
-
     immediate_context_->DrawIndexed(36, 0, 0);
+}
 
-    // Begin Direct2D drawing.
-    d2d_render_target_->BeginDraw();
-
-    // Update the QR code (no more than once every 5 seconds).
-    UpdateQrCode(current_time);
-
-    D2D1_SIZE_F size = d2d_render_target_->GetSize();
-    float y_pos = kMargin;
-
-    // Draw description lines.
+void ArgumentDebuggerWindow::RenderTextHud(const D2D1_SIZE_F& size, float& y_pos)
+{
     for (const auto& line : kDescriptionLines)
     {
         D2D1_RECT_F rect = D2D1::RectF(kMargin, y_pos, size.width - kMargin, y_pos + kLineHeight);
@@ -1051,16 +903,12 @@ void ArgumentDebuggerWindow::RenderFrame()
     }
     y_pos += kLineHeight;
 
-    // Draw command-line argument header.
     std::wstring cli_text = BuildCliHeaderText(args_);
-    {
-        D2D1_RECT_F rect = D2D1::RectF(kMargin, y_pos, size.width - kMargin, y_pos + kLineHeight);
-        d2d_render_target_->DrawText(cli_text.c_str(), static_cast<UINT32>(cli_text.size()), text_format_.Get(), rect,
-                                     green_brush_.Get());
-    }
+    D2D1_RECT_F header_rect = D2D1::RectF(kMargin, y_pos, size.width - kMargin, y_pos + kLineHeight);
+    d2d_render_target_->DrawText(cli_text.c_str(), static_cast<UINT32>(cli_text.size()), text_format_.Get(),
+                                 header_rect, green_brush_.Get());
     y_pos += kLineHeight;
 
-    // Draw the actual command-line arguments (if any).
     if (!args_.empty())
     {
         std::wstring formatted_args = BuildCliArgsText(args_);
@@ -1071,57 +919,53 @@ void ArgumentDebuggerWindow::RenderFrame()
     }
 
     y_pos += 10.0f;
-    // Additional drawing: display command execution status.
+    D2D1_RECT_F status_rect = D2D1::RectF(kMargin, size.height - 220.0f, size.width - kMargin, size.height - 190.0f);
+    d2d_render_target_->DrawText(command_status_.c_str(), static_cast<UINT32>(command_status_.size()),
+                                 text_format_.Get(), status_rect, white_brush_.Get());
+}
+
+void ArgumentDebuggerWindow::RenderLoadedDataPanel(const D2D1_SIZE_F& size)
+{
+    if (!show_logs_ || loaded_data_.empty())
+        return;
+
+    D2D1_RECT_F data_rect = D2D1::RectF(size.width - 750.0f, kMargin, size.width - kMargin, kMargin + 380.0f);
+    d2d_render_target_->DrawText(loaded_data_.c_str(), static_cast<UINT32>(loaded_data_.size()),
+                                 data_text_format_.Get(), data_rect, green_brush_.Get());
+
+    if (!loaded_data_title_.empty())
     {
-        D2D1_RECT_F status_rect =
-            D2D1::RectF(kMargin, size.height - 220.0f, size.width - kMargin, size.height - 190.0f);
-        d2d_render_target_->DrawText(command_status_.c_str(), static_cast<UINT32>(command_status_.size()),
-                                     text_format_.Get(), status_rect, white_brush_.Get());
+        D2D1_RECT_F title_rect = D2D1::RectF(size.width - 750.0f, kMargin - 30.0f, size.width - kMargin, kMargin);
+        d2d_render_target_->DrawText(loaded_data_title_.c_str(), static_cast<UINT32>(loaded_data_title_.size()),
+                                     text_format_.Get(), title_rect, yellow_brush_.Get());
     }
+}
 
-    // Draw loaded data (if any) in the top-right corner.
-    if (show_logs_ && !loaded_data_.empty())
+void ArgumentDebuggerWindow::RenderPathsPanel(const D2D1_SIZE_F& size)
+{
+    if (!show_paths_ || cached_path_items_.empty())
+        return;
+
+    constexpr float pathWidth = 400.0f;
+    constexpr float pathLineHeight = 25.0f;
+    const float pathEndX = size.width - kMargin;
+    const float pathStartX = pathEndX - pathWidth;
+    float currentY = size.height * 0.3f;
+
+    for (const auto& item : cached_path_items_)
     {
-        // Use a smaller font for logs and expand the display area
-        // Added padding at the bottom (reduced height by 20px)
-        D2D1_RECT_F data_rect = D2D1::RectF(size.width - 750.0f, kMargin, size.width - kMargin, kMargin + 380.0f);
-        d2d_render_target_->DrawText(loaded_data_.c_str(), static_cast<UINT32>(loaded_data_.size()),
-                                     data_text_format_.Get(), data_rect, green_brush_.Get());
-
-        // Add a title for the loaded data section
-        if (!loaded_data_title_.empty())
-        {
-            D2D1_RECT_F title_rect = D2D1::RectF(size.width - 750.0f, kMargin - 30.0f, size.width - kMargin, kMargin);
-            d2d_render_target_->DrawText(loaded_data_title_.c_str(), static_cast<UINT32>(loaded_data_title_.size()), 
-                                         text_format_.Get(), title_rect, yellow_brush_.Get());
-        }
+        std::wstring fullLine = item.first + item.second;
+        D2D1_RECT_F rect = D2D1::RectF(pathStartX, currentY, pathEndX, currentY + pathLineHeight);
+        d2d_render_target_->DrawText(fullLine.c_str(), static_cast<UINT32>(fullLine.size()), small_text_format_.Get(),
+                                     rect, white_brush_.Get());
+        currentY += pathLineHeight;
     }
+}
 
-    // Display file paths only if enabled and cached data is available
-    if (show_paths_ && !cached_path_items_.empty())
-    {
-        // Use smaller font for path information
-        // Position at the right edge, aligned with mic indicators
-        float pathWidth = 400.0f;  // Width of the path info block
-        float pathEndX = size.width - kMargin;  // Same margin as mic indicators
-        float pathStartX = pathEndX - pathWidth;  // Left edge of the path block
-        float pathStartY = size.height * 0.3f; // Move up a bit to fit more items
-        float pathLineHeight = 25.0f;
-
-        // Draw cached path information with smaller font
-        float currentY = pathStartY;
-        for (const auto& item : cached_path_items_)
-        {
-            std::wstring fullLine = item.first + item.second;
-            D2D1_RECT_F rect = D2D1::RectF(pathStartX, currentY, pathEndX, currentY + pathLineHeight);
-            d2d_render_target_->DrawText(fullLine.c_str(), static_cast<UINT32>(fullLine.size()), small_text_format_.Get(),
-                                         rect, white_brush_.Get());
-            currentY += pathLineHeight;
-        }
-    } // End of if (show_paths_)
-
-    // Input field and prompt.
-    std::wstring exit_prompt = L"Type 'exit', 'save', 'read', 'logs', 'path', 'sound' or 'memory' and press Enter:";
+void ArgumentDebuggerWindow::RenderInputPrompt(const D2D1_SIZE_F& size)
+{
+    const std::wstring exit_prompt =
+        L"Type 'exit', 'save', 'read', 'logs', 'path', 'sound' or 'memory' and press Enter:";
     D2D1_RECT_F exit_prompt_rect =
         D2D1::RectF(kMargin, size.height - 100.0f, size.width - kMargin, size.height - 70.0f);
     d2d_render_target_->DrawText(exit_prompt.c_str(), static_cast<UINT32>(exit_prompt.size()), text_format_.Get(),
@@ -1130,118 +974,96 @@ void ArgumentDebuggerWindow::RenderFrame()
     D2D1_RECT_F user_input_rect = D2D1::RectF(kMargin, size.height - 60.0f, size.width - kMargin, size.height - 30.0f);
     d2d_render_target_->DrawText(user_input_.c_str(), static_cast<UINT32>(user_input_.size()), text_format_.Get(),
                                  user_input_rect, green_brush_.Get());
+}
 
-    // Draw the QR code in the bottom-left corner.
-    if (qr_bitmap_)
-    {
-        constexpr int qr_size = 375;
-        constexpr float qr_margin = 60.0f;
-        float qr_x = qr_margin;
-        float qr_y = size.height - qr_size - qr_margin - 100.0f - (size.height * 0.2f); // Raised by 20% of screen height
-        d2d_render_target_->DrawBitmap(qr_bitmap_.Get(), D2D1::RectF(qr_x, qr_y, qr_x + qr_size, qr_y + qr_size));
-    }
+void ArgumentDebuggerWindow::RenderQrBitmap(const D2D1_SIZE_F& size)
+{
+    if (!qr_bitmap_)
+        return;
+    constexpr int qr_size = 375;
+    constexpr float qr_margin = 60.0f;
+    const float qr_x = qr_margin;
+    const float qr_y = size.height - qr_size - qr_margin - 100.0f - (size.height * 0.2f);
+    d2d_render_target_->DrawBitmap(qr_bitmap_.Get(), D2D1::RectF(qr_x, qr_y, qr_x + qr_size, qr_y + qr_size));
+}
 
-    // --- Volume Meter (L/R) ---
-    if (mic_available_)
-    {
-        float level = mic_level_.load(); // 0..1
-
-        // Draw two volume bars - one for left, one for right
-        float bar_w = 30.0f, bar_h = 150.0f;
-        float spacing = 15.0f;
-        float total_width = bar_w * 2 + spacing;
-        float x0 = size.width - kMargin - total_width;
-        float y0 = size.height - kMargin - bar_h;
-
-        // Device name title with improved layout
-        std::wstring dev_title = L"Mic: " + (mic_name_.empty() ? L"<unknown>" : mic_name_);
-
-        // Position device name at the right edge of the screen
-        // parameters for the text area
-        float devAreaWidth = 200.0f;           // width of the area
-        float devAreaHeight = 2 * kLineHeight; // two lines high
-        float marginRight = kMargin;           // margin from right edge of screen
-        float marginBottom = 5.0f;             // margin above bars
-
-        // right edge of the area - just after the screen margin
-        float devRight = size.width - marginRight;
-        // left - right minus area width
-        float devLeft = devRight - devAreaWidth;
-        // bottom of area - y0 (top of the bars)
-        // y0 is already defined: y0 = size.height - kMargin - bar_h
-        // top - bottom minus area height and small margin
-        float devBottom = y0;
-        float devTop = devBottom - devAreaHeight - marginBottom;
-
-        D2D1_RECT_F dev_rect = D2D1::RectF(devLeft, devTop, devRight, devBottom);
-
-        // Draw multiline text
-        d2d_render_target_->DrawText(dev_title.c_str(), (UINT32)dev_title.size(), small_text_format_.Get(), dev_rect,
-                                     white_brush_.Get());
-
-        // Left channel (using the same level for both channels in this demo)
-        // In a real stereo implementation, you'd capture separate L/R levels
-        float left_level = level;
-        float left_filled = bar_h * left_level;
-
-        // Left bar outline
-        d2d_render_target_->DrawRectangle(D2D1::RectF(x0, y0, x0 + bar_w, y0 + bar_h), white_brush_.Get(), 2.0f);
-
-        // Left bar fill
-        d2d_render_target_->FillRectangle(D2D1::RectF(x0, y0 + (bar_h - left_filled), x0 + bar_w, y0 + bar_h),
-                                          green_brush_.Get());
-
-        // Right channel (using same level for demo, but with slight variation)
-        float right_level = level * 0.9f; // Slight variation for demo
-        float right_filled = bar_h * right_level;
-        float right_x = x0 + bar_w + spacing;
-
-        // Right bar outline
-        d2d_render_target_->DrawRectangle(D2D1::RectF(right_x, y0, right_x + bar_w, y0 + bar_h), white_brush_.Get(),
-                                          2.0f);
-
-        // Right bar fill
-        d2d_render_target_->FillRectangle(
-            D2D1::RectF(right_x, y0 + (bar_h - right_filled), right_x + bar_w, y0 + bar_h), green_brush_.Get());
-
-        // Draw L/R labels
-        std::wstring left_label = L"L";
-        std::wstring right_label = L"R";
-
-        D2D1_RECT_F left_label_rect = D2D1::RectF(x0, y0 - 30.0f, x0 + bar_w, y0);
-        D2D1_RECT_F right_label_rect = D2D1::RectF(right_x, y0 - 30.0f, right_x + bar_w, y0);
-
-        d2d_render_target_->DrawText(left_label.c_str(), (UINT32)left_label.size(), text_format_.Get(), left_label_rect,
-                                     yellow_brush_.Get());
-        d2d_render_target_->DrawText(right_label.c_str(), (UINT32)right_label.size(), text_format_.Get(),
-                                     right_label_rect, yellow_brush_.Get());
-    }
-    else
+void ArgumentDebuggerWindow::RenderVolumeMeter(const D2D1_SIZE_F& size)
+{
+    if (!audio_capture_.IsAvailable())
     {
         std::wstring no_mic = L"No microphone detected";
         D2D1_RECT_F r =
             D2D1::RectF(size.width - 300.f, size.height - 50.f, size.width - kMargin, size.height - kMargin);
-        d2d_render_target_->DrawText(no_mic.c_str(), (UINT32)no_mic.size(), text_format_.Get(), r, yellow_brush_.Get());
+        d2d_render_target_->DrawText(no_mic.c_str(), static_cast<UINT32>(no_mic.size()), text_format_.Get(), r,
+                                     yellow_brush_.Get());
+        return;
     }
 
-    // End Direct2D drawing with proper error handling
-    HRESULT hrEnd = d2d_render_target_->EndDraw();
-    if (hrEnd == D2DERR_RECREATE_TARGET)
+    const float level = audio_capture_.Level();
+
+    constexpr float bar_w = 30.0f;
+    constexpr float bar_h = 150.0f;
+    constexpr float spacing = 15.0f;
+    const float total_width = bar_w * 2 + spacing;
+    const float x0 = size.width - kMargin - total_width;
+    const float y0 = size.height - kMargin - bar_h;
+
+    const std::wstring& dev_name = audio_capture_.Name();
+    const std::wstring dev_title = L"Mic: " + (dev_name.empty() ? L"<unknown>" : dev_name);
+
+    constexpr float devAreaWidth = 200.0f;
+    constexpr float devAreaHeight = 2 * kLineHeight;
+    constexpr float marginBottom = 5.0f;
+    const float devRight = size.width - kMargin;
+    const float devLeft = devRight - devAreaWidth;
+    const float devBottom = y0;
+    const float devTop = devBottom - devAreaHeight - marginBottom;
+
+    d2d_render_target_->DrawText(dev_title.c_str(), static_cast<UINT32>(dev_title.size()), small_text_format_.Get(),
+                                 D2D1::RectF(devLeft, devTop, devRight, devBottom), white_brush_.Get());
+
+    // Left channel bar.
+    const float left_filled = bar_h * level;
+    d2d_render_target_->DrawRectangle(D2D1::RectF(x0, y0, x0 + bar_w, y0 + bar_h), white_brush_.Get(), 2.0f);
+    d2d_render_target_->FillRectangle(D2D1::RectF(x0, y0 + (bar_h - left_filled), x0 + bar_w, y0 + bar_h),
+                                      green_brush_.Get());
+
+    // Right channel bar — slight variation for visual distinction from mono.
+    const float right_level = level * 0.9f;
+    const float right_filled = bar_h * right_level;
+    const float right_x = x0 + bar_w + spacing;
+    d2d_render_target_->DrawRectangle(D2D1::RectF(right_x, y0, right_x + bar_w, y0 + bar_h), white_brush_.Get(), 2.0f);
+    d2d_render_target_->FillRectangle(D2D1::RectF(right_x, y0 + (bar_h - right_filled), right_x + bar_w, y0 + bar_h),
+                                      green_brush_.Get());
+
+    const std::wstring left_label = L"L";
+    const std::wstring right_label = L"R";
+    d2d_render_target_->DrawText(left_label.c_str(), static_cast<UINT32>(left_label.size()), text_format_.Get(),
+                                 D2D1::RectF(x0, y0 - 30.0f, x0 + bar_w, y0), yellow_brush_.Get());
+    d2d_render_target_->DrawText(right_label.c_str(), static_cast<UINT32>(right_label.size()), text_format_.Get(),
+                                 D2D1::RectF(right_x, y0 - 30.0f, right_x + bar_w, y0), yellow_brush_.Get());
+}
+
+bool ArgumentDebuggerWindow::EndOverlay()
+{
+    HRESULT hr = d2d_render_target_->EndDraw();
+    if (hr == D2DERR_RECREATE_TARGET)
     {
-        // Device lost, resources need to be recreated
         Log(L"Device lost detected, recreating D2D resources");
-        // Reset brushes and text formats before recreating
         white_brush_.Reset();
         green_brush_.Reset();
         yellow_brush_.Reset();
         data_text_format_.Reset();
         CreateD2DResources();
-        return;
+        return false;
     }
-    if (FAILED(hrEnd))
+    if (FAILED(hr))
         throw std::runtime_error("Failed to end Direct2D draw.");
+    return true;
+}
 
-    // Log FPS no more than once every 5 seconds to avoid cluttering the log
+void ArgumentDebuggerWindow::PresentFrame()
+{
     static ULONGLONG lastFpsLogTime = 0;
     ULONGLONG currentTime = GetTickCount64();
     if (currentTime - lastFpsLogTime > 5000)
@@ -1250,14 +1072,15 @@ void ArgumentDebuggerWindow::RenderFrame()
         lastFpsLogTime = currentTime;
     }
 
-    // Present the frame on screen with error checking
-    // Use no VSync on Wine/Proton for better performance
-    bool isWine = GetModuleHandleW(L"ntdll.dll") && GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version");
-    UINT syncInterval = isWine ? 0 : 1; // 0 = no VSync, 1 = VSync
-    HRESULT hrPresent = swap_chain_->Present(syncInterval, 0);
-    if (hrPresent == DXGI_ERROR_DEVICE_REMOVED || hrPresent == DXGI_ERROR_DEVICE_RESET)
+    // Skip VSync under Wine/Proton — blocking Present on Wine can starve the
+    // whole message loop, producing reported FPS in the single digits.
+    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+    const bool isWine = hNtdll && GetProcAddress(hNtdll, "wine_get_version");
+    const UINT syncInterval = isWine ? 0 : 1;
+
+    HRESULT hr = swap_chain_->Present(syncInterval, 0);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
     {
-        // Device was removed or reset, recreate resources
         Log(L"Device removed/reset detected, recreating all graphics resources");
         CreateDeviceAndSwapChain(static_cast<UINT>(d2d_render_target_->GetSize().width),
                                  static_cast<UINT>(d2d_render_target_->GetSize().height));
@@ -1266,7 +1089,7 @@ void ArgumentDebuggerWindow::RenderFrame()
         CreateShadersAndGeometry();
         return;
     }
-    if (FAILED(hrPresent))
+    if (FAILED(hr))
         throw std::runtime_error("Failed to present frame.");
 }
 
@@ -1275,432 +1098,14 @@ void ArgumentDebuggerWindow::UpdateRotation(float delta_time)
     rotation_angle_ += delta_time * DirectX::XM_PIDIV4 / 2.0f;
 }
 
-// SEH wrapper function is implemented in seh_wrapper.cpp
-
-// Entry point that forwards to the raw SEH function
-__declspec(nothrow) DWORD WINAPI ArgumentDebuggerWindow::AudioCaptureThread(LPVOID param)
-{
-    // This is just a thin wrapper to maintain the class method interface
-    return RawAudioThreadWithSEH(param);
-}
-
-// The actual implementation with C++ exception handling
-DWORD ArgumentDebuggerWindow::AudioCaptureThreadImpl(LPVOID param)
-{
-    // Each thread needs its own COM initialization
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
-        return 0;
-
-    auto self = static_cast<ArgumentDebuggerWindow*>(param);
-    HANDLE mmHandle = nullptr; // Multimedia handle for thread priority
-
-    try
-    {
-        // Set audio thread priorities
-        DWORD taskIndex = 0;
-        mmHandle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
-        if (!mmHandle)
-        {
-            Log(L"Warning: AvSetMmThreadCharacteristicsW failed");
-        }
-        self->audio_client_->Start();
-
-        Log(L"Audio capture thread started");
-
-        while (self->audio_thread_running_.load())
-        {
-            DWORD waitResult = WaitForSingleObject(self->audio_event_, 200);
-            if (waitResult == WAIT_OBJECT_0)
-            {
-                Log(L"Audio thread: signal received");
-            }
-            else if (waitResult == WAIT_TIMEOUT)
-            {
-                // Log timeouts only once per 30 seconds to avoid log spam
-                static ULONGLONG lastTimeoutLog = 0;
-                ULONGLONG now = GetTickCount64();
-                if (now - lastTimeoutLog > 30000)
-                {
-                    Log(L"Audio thread: timeout (normal)");
-                    lastTimeoutLog = now;
-                }
-            }
-            else
-            {
-                Log(L"Audio thread: wait failed, code=" + std::to_wstring(waitResult));
-            }
-
-            // Call PollMicrophone directly - SEH handling moved to AudioCaptureThread
-            self->PollMicrophone();
-        }
-        self->audio_client_->Stop();
-
-        Log(L"Audio capture thread stopped");
-    }
-    catch (const std::exception& ex)
-    {
-        // Log exception from audio thread
-        Log(L"Audio thread exception: " + std::wstring(ex.what(), ex.what() + strlen(ex.what())));
-    }
-    catch (...)
-    {
-        // Log unknown exception from audio thread
-        Log(L"Audio thread: unknown exception");
-    }
-
-    // Revert thread characteristics if we set them
-    if (mmHandle)
-    {
-        AvRevertMmThreadCharacteristics(mmHandle);
-    }
-
-    CoUninitialize();
-    return 0;
-}
-
-void ArgumentDebuggerWindow::InitializeMicrophone()
-{
-    // No COM initialization here - it's already done in wWinMain
-
-    try
-    {
-        DX_CALL(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&device_enumerator_)),
-                "IMMDeviceEnumerator failed");
-
-        DX_CALL(device_enumerator_->GetDefaultAudioEndpoint(eCapture, eConsole, capture_device_.GetAddressOf()),
-                "No default capture device");
-
-        // --- FriendlyName -----------------------------------------------------------------
-        ComPtr<IPropertyStore> store;
-        DX_CALL(capture_device_->OpenPropertyStore(STGM_READ, &store), "OpenPropertyStore failed");
-
-        PROPVARIANT pv;
-        PropVariantInit(&pv);
-        DX_CALL(store->GetValue(PKEY_Device_FriendlyName, &pv), "GetValue(FriendlyName) failed");
-
-        mic_name_ = pv.vt == VT_LPWSTR ? pv.pwszVal : L"Unknown microphone";
-        PropVariantClear(&pv);
-        // ----------------------------------------------------------------------------------
-
-        mic_available_ = true;
-
-        DX_CALL(capture_device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                                          reinterpret_cast<void**>(audio_client_.GetAddressOf())),
-                "IAudioClient activate failed");
-
-        DX_CALL(audio_client_->GetMixFormat(&mix_format_), "GetMixFormat failed");
-
-        // Increased buffer size to 100ms for smoother visualization
-        REFERENCE_TIME buf_dur = 100 * 10000; // 1ms = 10,000 * 100ns
-        DX_CALL(audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, buf_dur, 0,
-                                          mix_format_, nullptr),
-                "AudioClient init failed");
-
-        DX_CALL(audio_client_->GetService(IID_PPV_ARGS(&capture_client_)), "GetService(IAudioCaptureClient)");
-
-        audio_event_ = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        if (audio_event_ == nullptr)
-        {
-            throw std::runtime_error("Failed to create audio event");
-        }
-        audio_client_->SetEventHandle(audio_event_);
-
-        // Set running flag before starting the thread
-        audio_thread_running_.store(true);
-
-        // Audio capture thread: use SEH-wrapped version
-        audio_thread_ = CreateThread(nullptr, 0, ArgumentDebuggerWindow::AudioCaptureThread, this, 0, nullptr);
-
-        Log(L"Microphone initialized successfully");
-    }
-    catch (const std::exception& ex)
-    {
-        Log(L"Microphone initialization failed: " + std::wstring(ex.what(), ex.what() + strlen(ex.what())));
-        mic_available_ = false; // Will display "No microphone detected"
-        return;                 // Don't create thread if initialization failed
-    }
-}
-
-void ArgumentDebuggerWindow::PollMicrophone()
-{
-    try
-    {
-        // Quick check to bail out if thread should terminate
-        if (!audio_thread_running_.load())
-        {
-            return;
-        }
-
-        // Safety check for capture_client_ pointer
-        if (!capture_client_)
-        {
-            Log(L"PollMicrophone: capture_client_ is NULL");
-            return;
-        }
-
-        UINT32 pkt_len = 0;
-        HRESULT hr = capture_client_->GetNextPacketSize(&pkt_len);
-        if (FAILED(hr))
-        {
-            Log(L"PollMicrophone: Initial GetNextPacketSize failed, hr=0x" + std::to_wstring(hr));
-            return;
-        }
-
-        // No packets available
-        if (pkt_len == 0)
-        {
-            return;
-        }
-
-        while (pkt_len > 0)
-        {
-            BYTE* data = nullptr;
-            UINT32 frames = 0;
-            DWORD flags = 0;
-            hr = capture_client_->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
-
-            if (FAILED(hr))
-            {
-                Log(L"PollMicrophone: GetBuffer failed, hr=0x" + std::to_wstring(hr));
-                break;
-            }
-
-            // Bail out if buffer is invalid
-            if (data == nullptr || frames == 0)
-            {
-                std::wstring dataStatus = data ? L"valid" : L"NULL";
-                Log(L"PollMicrophone: Invalid buffer - data=" + dataStatus + L", frames=" + std::to_wstring(frames));
-
-                // Still need to release the buffer even if data is NULL
-                if (SUCCEEDED(hr))
-                {
-                    capture_client_->ReleaseBuffer(frames);
-                }
-                break;
-            }
-
-            // Log buffer details
-            if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
-            {
-                Log(L"PollMicrophone: Silent buffer detected, frames=" + std::to_wstring(frames) + L", flags=0x" +
-                    std::to_wstring(flags));
-            }
-            else
-            {
-                Log(L"PollMicrophone: Buffer received: frames=" + std::to_wstring(frames) + L", flags=0x" +
-                    std::to_wstring(flags));
-            }
-
-            // For mono/stereo, 16-bit/32-bit float - taking absolute max value
-            float peak = 0.f;
-            if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT) && data != nullptr && mix_format_ != nullptr)
-            {
-                WORD tag = mix_format_->wFormatTag;
-                WORD bps = mix_format_->wBitsPerSample;
-
-                if (tag == WAVE_FORMAT_EXTENSIBLE)
-                {
-                    // Safe cast to WAVEFORMATEXTENSIBLE* but verify size first
-                    if (mix_format_->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX))
-                    {
-                        auto wfex = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(mix_format_);
-
-                        // Safely check GUID comparison
-                        if (IsEqualGUID(wfex->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT))
-                            tag = WAVE_FORMAT_IEEE_FLOAT;
-                        else if (IsEqualGUID(wfex->SubFormat, KSDATAFORMAT_SUBTYPE_PCM))
-                            tag = WAVE_FORMAT_PCM;
-                        else
-                        {
-                            Log(L"Unknown SubFormat GUID in WAVE_FORMAT_EXTENSIBLE");
-                        }
-
-                        // Use wValidBitsPerSample if non-zero, otherwise use format's bit depth
-                        bps = wfex->Samples.wValidBitsPerSample;
-                        if (bps == 0)
-                        {
-                            bps = wfex->Format.wBitsPerSample;
-                        }
-                    }
-                    else
-                    {
-                        Log(L"WAVE_FORMAT_EXTENSIBLE with invalid cbSize: " + std::to_wstring(mix_format_->cbSize));
-                        // Fall back to basic format info
-                        tag = WAVE_FORMAT_PCM; // Assume PCM as fallback
-                        bps = mix_format_->wBitsPerSample;
-                    }
-                }
-
-                // Safely calculate total samples, checking for integer overflow
-                UINT32 channels = mix_format_->nChannels;
-                if (channels == 0)
-                {
-                    Log(L"Invalid channel count: 0");
-                    channels = 1; // Default to mono
-                }
-
-                // Check for integer overflow
-                UINT64 totalSamples64 = static_cast<UINT64>(frames) * static_cast<UINT64>(channels);
-                if (totalSamples64 > UINT32_MAX)
-                {
-                    Log(L"Sample count overflow: " + std::to_wstring(totalSamples64));
-                    break;
-                }
-
-                UINT32 totalSamples = static_cast<UINT32>(totalSamples64);
-
-                try
-                {
-                    if (tag == WAVE_FORMAT_IEEE_FLOAT && bps == 32)
-                    {
-                        const float* samples = reinterpret_cast<const float*>(data);
-                        for (UINT32 i = 0; i < totalSamples; ++i)
-                        {
-                            float val = samples[i];
-                            if (val < 0)
-                                val = -val;
-                            if (val > peak)
-                                peak = val;
-                        }
-                    }
-                    else if (tag == WAVE_FORMAT_PCM && bps == 16)
-                    {
-                        const int16_t* samples = reinterpret_cast<const int16_t*>(data);
-                        for (UINT32 i = 0; i < totalSamples; ++i)
-                        {
-                            float val = samples[i] / 32768.0f;
-                            if (val < 0)
-                                val = -val;
-                            if (val > peak)
-                                peak = val;
-                        }
-                    }
-                    else if (tag == WAVE_FORMAT_PCM && bps == 24)
-                    {
-                        // 24-bit PCM is stored as 3 bytes per sample
-                        const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
-
-                        // Check if we have enough bytes for all samples (3 bytes per sample)
-                        UINT64 byteCount = static_cast<UINT64>(totalSamples) * 3;
-                        if (byteCount > SIZE_MAX)
-                        {
-                            Log(L"Byte count overflow for 24-bit audio");
-                            break;
-                        }
-
-                        for (UINT32 i = 0; i < totalSamples; ++i)
-                        {
-                            // Load 3 bytes into 32-bit integer (sign-extended)
-                            int32_t sample = (p[3 * i] << 8) | (p[3 * i + 1] << 16) | (p[3 * i + 2] << 24);
-                            sample >>= 8; // Shift back to get correct sign extension
-
-                            // Convert to float -1.0 to 1.0 (normalize by 2^23)
-                            float val = sample / 8388608.0f;
-                            if (val < 0)
-                                val = -val;
-                            if (val > peak)
-                                peak = val;
-                        }
-                    }
-                    else if (tag == WAVE_FORMAT_PCM && bps == 32)
-                    {
-                        const int32_t* samples = reinterpret_cast<const int32_t*>(data);
-                        for (UINT32 i = 0; i < totalSamples; ++i)
-                        {
-                            // Normalize by 2^31
-                            float val = samples[i] / 2147483648.0f;
-                            if (val < 0)
-                                val = -val;
-                            if (val > peak)
-                                peak = val;
-                        }
-                    }
-                    else
-                    {
-                        // Unsupported format
-                        Log(L"Unsupported audio format: tag=" + std::to_wstring(tag) + L", bps=" +
-                            std::to_wstring(bps));
-                    }
-                }
-                catch (...)
-                {
-                    Log(L"Exception during audio processing");
-                }
-
-                // Temporary logging to verify data is coming in
-                Log(L"PollMicrophone: peak=" + std::to_wstring(peak) + L", format tag=" + std::to_wstring(tag) +
-                    L", bps=" + std::to_wstring(bps));
-            }
-
-            // For better visualization - slight level smoothing (to avoid sharp jumps)
-            // In a real implementation this could be a more complex algorithm
-            float current_level = mic_level_.load();
-            float smoothed_level = current_level * 0.5f + peak * 0.5f; // More responsive smoothing
-            mic_level_.store(smoothed_level);
-
-            // Check if thread should exit before continuing
-            if (!audio_thread_running_.load())
-            {
-                Log(L"PollMicrophone: Thread signaled to exit, breaking");
-                break;
-            }
-
-            hr = capture_client_->ReleaseBuffer(frames);
-            if (FAILED(hr))
-            {
-                Log(L"PollMicrophone: ReleaseBuffer failed, hr=0x" + std::to_wstring(hr));
-                break;
-            }
-
-            // Check if thread should exit before getting next packet
-            if (!audio_thread_running_.load())
-            {
-                Log(L"PollMicrophone: Thread signaled to exit before next packet");
-                break;
-            }
-
-            hr = capture_client_->GetNextPacketSize(&pkt_len);
-            if (FAILED(hr))
-            {
-                Log(L"PollMicrophone: GetNextPacketSize failed after processing, hr=0x" + std::to_wstring(hr));
-                break;
-            }
-        }
-    }
-    catch (const std::exception& ex)
-    {
-        Log(L"PollMicrophone exception: " + std::wstring(ex.what(), ex.what() + strlen(ex.what())));
-    }
-    catch (...)
-    {
-        Log(L"PollMicrophone: unknown exception");
-    }
-}
+// Audio capture (WASAPI pipeline, thread, SEH wrapper) lives in
 
 void ArgumentDebuggerWindow::Cleanup()
 {
     Log(L"Cleanup started");
 
-    // Stop audio first if still running
-    if (audio_client_)
-    {
-        try
-        {
-            audio_client_->Stop();
-            Log(L"Audio client stopped in cleanup");
-        }
-        catch (...)
-        {
-            Log(L"Exception stopping audio client in cleanup");
-        }
-    }
-
-    // Reset audio COM objects first
-    capture_client_.Reset();
-    audio_client_.Reset();
-    capture_device_.Reset();
-    device_enumerator_.Reset();
+    // The audio pipeline is owned by `audio_capture_` and released either by
+    // its Stop() in OnDestroy or by its destructor.
 
     // Reset all graphics ComPtr objects to automatically release resources.
     vertex_shader_.Reset();
@@ -1715,7 +1120,7 @@ void ArgumentDebuggerWindow::Cleanup()
     d3d_device_.Reset();
     text_format_.Reset();
     small_text_format_.Reset(); // Release the small text format
-    data_text_format_.Reset(); // Release the data text format
+    data_text_format_.Reset();  // Release the data text format
     dwrite_factory_.Reset();
     d2d_render_target_.Reset();
     d2d_factory_.Reset();
@@ -1723,13 +1128,6 @@ void ArgumentDebuggerWindow::Cleanup()
     white_brush_.Reset();
     green_brush_.Reset();
     yellow_brush_.Reset();
-
-    // Audio thread and event are already closed in OnDestroy
-    if (mix_format_)
-    {
-        CoTaskMemFree(mix_format_);
-        mix_format_ = nullptr;
-    }
 
     Log(L"Cleanup finished");
 }
@@ -1875,152 +1273,33 @@ void ArgumentDebuggerWindow::ReadData()
 // Helper method to calculate and cache path information once
 void ArgumentDebuggerWindow::CalculatePathInfo()
 {
-    cached_path_items_.clear();
-    
-    // Display full and relative path where the application is running
-    wchar_t exePath[MAX_PATH] = L"\0";
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    std::wstring fullPath = exePath;
-
-    // Get current working directory for relative path
-    wchar_t currentDir[MAX_PATH] = L"\0";
-    GetCurrentDirectoryW(MAX_PATH, currentDir);
-    std::wstring currentDirStr = currentDir;
-
-    // Extract just the executable name
-    std::wstring exeName = fullPath;
-    size_t lastSlash = exeName.find_last_of(L"\\");
-    if (lastSlash != std::wstring::npos)
-    {
-        exeName = exeName.substr(lastSlash + 1);
-    }
-
-    // Extract directory from full path
-    std::wstring exeDir = fullPath;
-    if (lastSlash != std::wstring::npos)
-    {
-        exeDir = exeDir.substr(0, lastSlash);
-    }
-
-    // Get TEMP directory
-    wchar_t tempPath[MAX_PATH] = L"\0";
-    GetTempPathW(MAX_PATH, tempPath);
-    std::wstring tempDir = tempPath;
-    if (!tempDir.empty() && tempDir.back() == L'\\')
-    {
-        tempDir.pop_back(); // Remove trailing slash
-    }
-
-    // Get Windows directory
-    wchar_t winPath[MAX_PATH] = L"\0";
-    GetWindowsDirectoryW(winPath, MAX_PATH);
-    std::wstring winDir = winPath;
-
-    // Get System directory
-    wchar_t sysPath[MAX_PATH] = L"\0";
-    GetSystemDirectoryW(sysPath, MAX_PATH);
-    std::wstring sysDir = sysPath;
-
-    // Get command line
-    std::wstring cmdLine = GetCommandLineW();
-
-    // Get OS version
-    std::wstring osVersion = L"Unknown";
-    typedef NTSTATUS(WINAPI * RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
-    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
-    if (hNtdll)
-    {
-        RtlGetVersionPtr RtlGetVersion = (RtlGetVersionPtr)GetProcAddress(hNtdll, "RtlGetVersion");
-        if (RtlGetVersion)
-        {
-            RTL_OSVERSIONINFOW osvi = {0};
-            osvi.dwOSVersionInfoSize = sizeof(osvi);
-            if (RtlGetVersion(&osvi) == 0)
-            {
-                osVersion = L"Windows " + std::to_wstring(osvi.dwMajorVersion) + L"." +
-                            std::to_wstring(osvi.dwMinorVersion) + L" (Build " + std::to_wstring(osvi.dwBuildNumber) +
-                            L")";
-            }
-        }
-    }
-
-    // Check for Wine/Proton (simplified version)
-    std::wstring wineVersion = L"Not detected";
-    HMODULE hNtdllCheck = GetModuleHandleW(L"ntdll.dll");
-    if (hNtdllCheck && GetProcAddress(hNtdllCheck, "wine_get_version"))
-    {
-        typedef const char* (*wine_get_version_func)(void);
-        wine_get_version_func wine_get_version =
-            (wine_get_version_func)GetProcAddress(hNtdllCheck, "wine_get_version");
-        if (wine_get_version)
-        {
-            const char* version = wine_get_version();
-            if (version)
-            {
-                int size_needed = MultiByteToWideChar(CP_UTF8, 0, version, -1, NULL, 0);
-                std::wstring wversion(size_needed - 1, 0);
-                MultiByteToWideChar(CP_UTF8, 0, version, -1, &wversion[0], size_needed);
-                wineVersion = L"Wine " + wversion;
-                
-                // Quick Proton check
-                wchar_t envBuf[1024] = {0};
-                if (GetEnvironmentVariableW(L"PROTON_VERSION", envBuf, 1024) > 0)
-                {
-                    wineVersion = L"Proton " + std::wstring(envBuf) + L" (Wine " + wversion + L")";
-                }
-            }
-        }
-    }
-
-    // Get save path
-    std::wstring savePath = L"Not available";
-    PWSTR appdata_path = nullptr;
-    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata_path);
-    if (SUCCEEDED(hr))
-    {
-        savePath = appdata_path;
-        CoTaskMemFree(appdata_path);
-        savePath += L"\\CloudStreamingArgsDebugger\\saved_data.txt";
-    }
-
-    // Store all path information
-    cached_path_items_ = {
-        {L"OS Version: ", osVersion},
-        {L"Wine/Proton: ", wineVersion},
-        {L"Executable name: ", exeName},
-        {L"Full path: ", fullPath},
-        {L"Executable directory: ", exeDir},
-        {L"Current directory: ", currentDirStr},
-        {L"Command line: ", cmdLine},
-        {L"Save file path: ", savePath},
-        {L"TEMP directory: ", tempDir},
-        {L"Windows directory: ", winDir},
-        {L"System directory: ", sysDir}
-    };
+    cached_path_items_ = path_info::Collect();
 }
 
-void ArgumentDebuggerWindow::PlayTelephoneBeeps()  // Name kept for compatibility
+void ArgumentDebuggerWindow::PlayTelephoneBeeps() // Name kept for compatibility
 {
     // Create a separate thread to play beeps so UI doesn't freeze
-    std::thread beepThread([]() {
-        // Low-frequency continuous beep pattern
-        const int beepFrequency = 300;  // 300Hz - lower tone
-        const int beepDuration = 2000;  // 2 seconds beep
-        const int pauseDuration = 2000; // 2 seconds pause
-        const int totalDuration = 60000; // 1 minute total
-        
-        DWORD startTime = GetTickCount();
-        
-        while (GetTickCount() - startTime < totalDuration)
+    std::thread beepThread(
+        []()
         {
-            // Single long beep
-            Beep(beepFrequency, beepDuration);
-            
-            // Pause
-            Sleep(pauseDuration);
-        }
-    });
-    
+            // Low-frequency continuous beep pattern
+            const int beepFrequency = 300;   // 300Hz - lower tone
+            const int beepDuration = 2000;   // 2 seconds beep
+            const int pauseDuration = 2000;  // 2 seconds pause
+            const int totalDuration = 60000; // 1 minute total
+
+            DWORD startTime = GetTickCount();
+
+            while (GetTickCount() - startTime < totalDuration)
+            {
+                // Single long beep
+                Beep(beepFrequency, beepDuration);
+
+                // Pause
+                Sleep(pauseDuration);
+            }
+        });
+
     // Detach thread so it runs independently
     beepThread.detach();
 }
@@ -2040,7 +1319,7 @@ void ArgumentDebuggerWindow::ShowMemoryStats()
             stats += L"Private Bytes: " + std::to_wstring(pmc.PrivateUsage / 1024 / 1024) + L" MB\n";
             stats += L"Virtual Memory: " + std::to_wstring(pmc.PagefileUsage / 1024 / 1024) + L" MB\n";
             stats += L"Peak Virtual: " + std::to_wstring(pmc.PeakPagefileUsage / 1024 / 1024) + L" MB\n";
-            
+
             // Get system memory info
             MEMORYSTATUSEX memInfo;
             memInfo.dwLength = sizeof(MEMORYSTATUSEX);
@@ -2051,17 +1330,17 @@ void ArgumentDebuggerWindow::ShowMemoryStats()
                 stats += L"Available RAM: " + std::to_wstring(memInfo.ullAvailPhys / 1024 / 1024) + L" MB\n";
                 stats += L"Memory Load: " + std::to_wstring(memInfo.dwMemoryLoad) + L"%\n";
             }
-            
+
             // Add runtime information
             ULONGLONG uptime = GetTickCount64();
             stats += L"\n=== RUNTIME ===\n";
             stats += L"Uptime: " + std::to_wstring(uptime / 1000) + L" seconds\n";
-            
+
             // Store in loaded_data_ to display on screen
             loaded_data_ = stats;
             loaded_data_title_ = L"Memory Statistics:";
             show_logs_ = true;
-            
+
             command_status_ = L"Memory statistics displayed.";
             Log(L"Memory stats: WorkingSet=" + std::to_wstring(pmc.WorkingSetSize / 1024 / 1024) + L"MB");
         }

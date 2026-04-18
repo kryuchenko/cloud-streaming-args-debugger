@@ -4,9 +4,11 @@ project(ArgumentDebuggerTests LANGUAGES CXX)
 # Explicitly specify that tests are console applications
 set(CMAKE_WIN32_EXECUTABLE OFF)
 
-# Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
+# Set C++ standard (kept in sync with the top-level CMakeLists.txt and with
+# the /std:c++20 flag used by .github/workflows/build.yml).
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Find GoogleTest package
 find_package(GTest CONFIG REQUIRED)
@@ -22,6 +24,7 @@ set(TEST_SOURCES
     path_utils_tests.cpp
     qr_code_tests.cpp
     audio_tests.cpp
+    audio_peak_tests.cpp
     logging_tests.cpp
     data_persistence_tests.cpp
     string_conversion_tests.cpp
@@ -29,12 +32,16 @@ set(TEST_SOURCES
     fps_calculation_tests.cpp
     memory_safety_tests.cpp
     buffer_safety_tests.cpp
+    path_info_tests.cpp
 )
 
 # Add source files from parent directory that contain functions we're testing
 set(PARENT_SOURCES
     ../qrcodegen.cpp
     ../cli_args_debugger.cpp
+    ../audio_capture.cpp
+    ../log_manager.cpp
+    ../path_info.cpp
     ../seh_wrapper.cpp
 )
 

@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.15)
 project(CloudStreamingArgsDebugger LANGUAGES CXX)
 
+# Use C++20 project-wide. The GitHub Actions build.yml invokes cl with
+# /std:c++20 directly; keep the CMake path in sync so the two build modes
+# compile the same language.
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 # Specify that this is a Win32 application with wWinMain entry point
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS")
 
@@ -16,6 +23,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_CURRENT_SOURCE_DIR}/build)
 add_executable(cloud-streaming-args-debugger
     WIN32                        # Specify that the application uses WinMain instead of main
     cli_args_debugger.cpp
+    audio_capture.cpp
+    log_manager.cpp
+    path_info.cpp
     seh_wrapper.cpp
     qrcodegen.cpp                # Include QR code generator
 )
