@@ -96,6 +96,10 @@ using qrcodegen::QrCode;
 // Path/env inspection (executable path, OS version, Wine/Proton, etc.)
 #include "path_info.hpp"
 
+// WASAPI microphone capture (owns its own thread, COM objects, and level
+// smoothing). See audio_capture.hpp for the public contract.
+#include "audio_capture.hpp"
+
 // Use Microsoft::WRL::ComPtr for COM object management
 using Microsoft::WRL::ComPtr;
 
@@ -155,8 +159,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 ArgumentDebuggerWindow* g_app_instance = nullptr;
 
 // External SEH wrapper function (defined in seh_wrapper.cpp)
-extern "C" DWORD WINAPI RawAudioThreadWithSEH(LPVOID param) noexcept;
-
 // Global function for unhandled exception filter - renamed to avoid conflict
 LONG WINAPI AppUnhandledExceptionFilter(EXCEPTION_POINTERS* ep)
 {
@@ -183,9 +185,6 @@ class ArgumentDebuggerWindow
         return is_running_;
     }
 
-    // Thread implementation with C++ exception handling - public for thread access
-    DWORD AudioCaptureThreadImpl(LPVOID param);
-
   private:
     void InitializeWindow(HINSTANCE h_instance, int cmd_show);
     void InitializeDevice();
@@ -193,14 +192,9 @@ class ArgumentDebuggerWindow
     void CreateRenderTargetView();
     void CreateD2DResources();
     void CreateShadersAndGeometry();
-    void InitializeMicrophone();
-    void PollMicrophone();
     void RenderFrame();
     void Cleanup();
     void UpdateRotation(float delta_time);
-
-    // Audio capture thread function with correct calling convention and SEH wrapper
-    static __declspec(nothrow) DWORD WINAPI AudioCaptureThread(LPVOID param);
 
   private:
     // Update QR code – here we add the FPS synchronization logic.
@@ -276,17 +270,7 @@ class ArgumentDebuggerWindow
     ComPtr<ID3D11PixelShader> pixel_shader_;
 
     // WASAPI
-    ComPtr<IMMDeviceEnumerator> device_enumerator_;
-    ComPtr<IMMDevice> capture_device_;
-    ComPtr<IAudioClient> audio_client_;
-    ComPtr<IAudioCaptureClient> capture_client_;
-    WAVEFORMATEX* mix_format_ = nullptr;
-    HANDLE audio_event_ = nullptr;
-    HANDLE audio_thread_ = nullptr;
-    std::atomic<float> mic_level_{0.f}; // 0..1
-    std::atomic<bool> mic_available_{false};
-    std::atomic<bool> audio_thread_running_{false}; // Flag for safe thread termination
-    std::wstring mic_name_;                         // FriendlyName ("USB Mic (Realtek ...)")
+    AudioCapture audio_capture_; // Owns the WASAPI pipeline and capture thread
 };
 
 #ifndef EXCLUDE_MAIN
@@ -532,33 +516,9 @@ void ArgumentDebuggerWindow::OnDestroy()
 {
     Log(L"Window destroy event");
 
-    // 1. Signal threads to exit via atomic flags
     is_running_ = false;
-    audio_thread_running_.store(false);
-
-    // Wake up audio thread if waiting
-    if (audio_event_)
-        SetEvent(audio_event_);
-
-    // 2. Wait for thread completion with timeout to prevent hanging
-    if (audio_thread_)
-    {
-        DWORD wait_result = WaitForSingleObject(audio_thread_, 5000);  // 5 second timeout
-        if (wait_result == WAIT_TIMEOUT)
-        {
-            Log(L"WARNING: Audio thread did not terminate gracefully, forcing termination");
-            TerminateThread(audio_thread_, 0);
-        }
-        CloseHandle(audio_thread_);
-        audio_thread_ = nullptr;
-    }
-    if (audio_event_)
-    { // Close event handle
-        CloseHandle(audio_event_);
-        audio_event_ = nullptr;
-    }
-
-    Cleanup(); // 3. Now safely release COM objects
+    audio_capture_.Stop();
+    Cleanup();
     PostQuitMessage(0);
 }
 
@@ -600,7 +560,7 @@ void ArgumentDebuggerWindow::InitializeDevice()
     CreateRenderTargetView();
     CreateD2DResources();
     CreateShadersAndGeometry();
-    InitializeMicrophone();
+    audio_capture_.Initialize();
 }
 
 void ArgumentDebuggerWindow::CreateDeviceAndSwapChain(UINT width, UINT height)
@@ -1008,9 +968,9 @@ void ArgumentDebuggerWindow::RenderFrame()
     }
 
     // --- Volume Meter (L/R) ---
-    if (mic_available_)
+    if (audio_capture_.IsAvailable())
     {
-        float level = mic_level_.load(); // 0..1
+        float level = audio_capture_.Level(); // 0..1
 
         // Draw two volume bars - one for left, one for right
         float bar_w = 30.0f, bar_h = 150.0f;
@@ -1020,7 +980,8 @@ void ArgumentDebuggerWindow::RenderFrame()
         float y0 = size.height - kMargin - bar_h;
 
         // Device name title with improved layout
-        std::wstring dev_title = L"Mic: " + (mic_name_.empty() ? L"<unknown>" : mic_name_);
+        const std::wstring& dev_name = audio_capture_.Name();
+        std::wstring dev_title = L"Mic: " + (dev_name.empty() ? L"<unknown>" : dev_name);
 
         // Position device name at the right edge of the screen
         // parameters for the text area
@@ -1141,432 +1102,14 @@ void ArgumentDebuggerWindow::UpdateRotation(float delta_time)
     rotation_angle_ += delta_time * DirectX::XM_PIDIV4 / 2.0f;
 }
 
-// SEH wrapper function is implemented in seh_wrapper.cpp
-
-// Entry point that forwards to the raw SEH function
-__declspec(nothrow) DWORD WINAPI ArgumentDebuggerWindow::AudioCaptureThread(LPVOID param)
-{
-    // This is just a thin wrapper to maintain the class method interface
-    return RawAudioThreadWithSEH(param);
-}
-
-// The actual implementation with C++ exception handling
-DWORD ArgumentDebuggerWindow::AudioCaptureThreadImpl(LPVOID param)
-{
-    // Each thread needs its own COM initialization
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE)
-        return 0;
-
-    auto self = static_cast<ArgumentDebuggerWindow*>(param);
-    HANDLE mmHandle = nullptr; // Multimedia handle for thread priority
-
-    try
-    {
-        // Set audio thread priorities
-        DWORD taskIndex = 0;
-        mmHandle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
-        if (!mmHandle)
-        {
-            Log(L"Warning: AvSetMmThreadCharacteristicsW failed");
-        }
-        self->audio_client_->Start();
-
-        Log(L"Audio capture thread started");
-
-        while (self->audio_thread_running_.load())
-        {
-            DWORD waitResult = WaitForSingleObject(self->audio_event_, 200);
-            if (waitResult == WAIT_OBJECT_0)
-            {
-                Log(L"Audio thread: signal received");
-            }
-            else if (waitResult == WAIT_TIMEOUT)
-            {
-                // Log timeouts only once per 30 seconds to avoid log spam
-                static ULONGLONG lastTimeoutLog = 0;
-                ULONGLONG now = GetTickCount64();
-                if (now - lastTimeoutLog > 30000)
-                {
-                    Log(L"Audio thread: timeout (normal)");
-                    lastTimeoutLog = now;
-                }
-            }
-            else
-            {
-                Log(L"Audio thread: wait failed, code=" + std::to_wstring(waitResult));
-            }
-
-            // Call PollMicrophone directly - SEH handling moved to AudioCaptureThread
-            self->PollMicrophone();
-        }
-        self->audio_client_->Stop();
-
-        Log(L"Audio capture thread stopped");
-    }
-    catch (const std::exception& ex)
-    {
-        // Log exception from audio thread
-        Log(L"Audio thread exception: " + std::wstring(ex.what(), ex.what() + strlen(ex.what())));
-    }
-    catch (...)
-    {
-        // Log unknown exception from audio thread
-        Log(L"Audio thread: unknown exception");
-    }
-
-    // Revert thread characteristics if we set them
-    if (mmHandle)
-    {
-        AvRevertMmThreadCharacteristics(mmHandle);
-    }
-
-    CoUninitialize();
-    return 0;
-}
-
-void ArgumentDebuggerWindow::InitializeMicrophone()
-{
-    // No COM initialization here - it's already done in wWinMain
-
-    try
-    {
-        DX_CALL(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&device_enumerator_)),
-                "IMMDeviceEnumerator failed");
-
-        DX_CALL(device_enumerator_->GetDefaultAudioEndpoint(eCapture, eConsole, capture_device_.GetAddressOf()),
-                "No default capture device");
-
-        // --- FriendlyName -----------------------------------------------------------------
-        ComPtr<IPropertyStore> store;
-        DX_CALL(capture_device_->OpenPropertyStore(STGM_READ, &store), "OpenPropertyStore failed");
-
-        PROPVARIANT pv;
-        PropVariantInit(&pv);
-        DX_CALL(store->GetValue(PKEY_Device_FriendlyName, &pv), "GetValue(FriendlyName) failed");
-
-        mic_name_ = pv.vt == VT_LPWSTR ? pv.pwszVal : L"Unknown microphone";
-        PropVariantClear(&pv);
-        // ----------------------------------------------------------------------------------
-
-        mic_available_ = true;
-
-        DX_CALL(capture_device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                                          reinterpret_cast<void**>(audio_client_.GetAddressOf())),
-                "IAudioClient activate failed");
-
-        DX_CALL(audio_client_->GetMixFormat(&mix_format_), "GetMixFormat failed");
-
-        // Increased buffer size to 100ms for smoother visualization
-        REFERENCE_TIME buf_dur = 100 * 10000; // 1ms = 10,000 * 100ns
-        DX_CALL(audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, buf_dur, 0,
-                                          mix_format_, nullptr),
-                "AudioClient init failed");
-
-        DX_CALL(audio_client_->GetService(IID_PPV_ARGS(&capture_client_)), "GetService(IAudioCaptureClient)");
-
-        audio_event_ = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        if (audio_event_ == nullptr)
-        {
-            throw std::runtime_error("Failed to create audio event");
-        }
-        audio_client_->SetEventHandle(audio_event_);
-
-        // Set running flag before starting the thread
-        audio_thread_running_.store(true);
-
-        // Audio capture thread: use SEH-wrapped version
-        audio_thread_ = CreateThread(nullptr, 0, ArgumentDebuggerWindow::AudioCaptureThread, this, 0, nullptr);
-
-        Log(L"Microphone initialized successfully");
-    }
-    catch (const std::exception& ex)
-    {
-        Log(L"Microphone initialization failed: " + std::wstring(ex.what(), ex.what() + strlen(ex.what())));
-        mic_available_ = false; // Will display "No microphone detected"
-        return;                 // Don't create thread if initialization failed
-    }
-}
-
-void ArgumentDebuggerWindow::PollMicrophone()
-{
-    try
-    {
-        // Quick check to bail out if thread should terminate
-        if (!audio_thread_running_.load())
-        {
-            return;
-        }
-
-        // Safety check for capture_client_ pointer
-        if (!capture_client_)
-        {
-            Log(L"PollMicrophone: capture_client_ is NULL");
-            return;
-        }
-
-        UINT32 pkt_len = 0;
-        HRESULT hr = capture_client_->GetNextPacketSize(&pkt_len);
-        if (FAILED(hr))
-        {
-            Log(L"PollMicrophone: Initial GetNextPacketSize failed, hr=0x" + std::to_wstring(hr));
-            return;
-        }
-
-        // No packets available
-        if (pkt_len == 0)
-        {
-            return;
-        }
-
-        while (pkt_len > 0)
-        {
-            BYTE* data = nullptr;
-            UINT32 frames = 0;
-            DWORD flags = 0;
-            hr = capture_client_->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
-
-            if (FAILED(hr))
-            {
-                Log(L"PollMicrophone: GetBuffer failed, hr=0x" + std::to_wstring(hr));
-                break;
-            }
-
-            // Bail out if buffer is invalid
-            if (data == nullptr || frames == 0)
-            {
-                std::wstring dataStatus = data ? L"valid" : L"NULL";
-                Log(L"PollMicrophone: Invalid buffer - data=" + dataStatus + L", frames=" + std::to_wstring(frames));
-
-                // Still need to release the buffer even if data is NULL
-                if (SUCCEEDED(hr))
-                {
-                    capture_client_->ReleaseBuffer(frames);
-                }
-                break;
-            }
-
-            // Log buffer details
-            if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
-            {
-                Log(L"PollMicrophone: Silent buffer detected, frames=" + std::to_wstring(frames) + L", flags=0x" +
-                    std::to_wstring(flags));
-            }
-            else
-            {
-                Log(L"PollMicrophone: Buffer received: frames=" + std::to_wstring(frames) + L", flags=0x" +
-                    std::to_wstring(flags));
-            }
-
-            // For mono/stereo, 16-bit/32-bit float - taking absolute max value
-            float peak = 0.f;
-            if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT) && data != nullptr && mix_format_ != nullptr)
-            {
-                WORD tag = mix_format_->wFormatTag;
-                WORD bps = mix_format_->wBitsPerSample;
-
-                if (tag == WAVE_FORMAT_EXTENSIBLE)
-                {
-                    // Safe cast to WAVEFORMATEXTENSIBLE* but verify size first
-                    if (mix_format_->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX))
-                    {
-                        auto wfex = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(mix_format_);
-
-                        // Safely check GUID comparison
-                        if (IsEqualGUID(wfex->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT))
-                            tag = WAVE_FORMAT_IEEE_FLOAT;
-                        else if (IsEqualGUID(wfex->SubFormat, KSDATAFORMAT_SUBTYPE_PCM))
-                            tag = WAVE_FORMAT_PCM;
-                        else
-                        {
-                            Log(L"Unknown SubFormat GUID in WAVE_FORMAT_EXTENSIBLE");
-                        }
-
-                        // Use wValidBitsPerSample if non-zero, otherwise use format's bit depth
-                        bps = wfex->Samples.wValidBitsPerSample;
-                        if (bps == 0)
-                        {
-                            bps = wfex->Format.wBitsPerSample;
-                        }
-                    }
-                    else
-                    {
-                        Log(L"WAVE_FORMAT_EXTENSIBLE with invalid cbSize: " + std::to_wstring(mix_format_->cbSize));
-                        // Fall back to basic format info
-                        tag = WAVE_FORMAT_PCM; // Assume PCM as fallback
-                        bps = mix_format_->wBitsPerSample;
-                    }
-                }
-
-                // Safely calculate total samples, checking for integer overflow
-                UINT32 channels = mix_format_->nChannels;
-                if (channels == 0)
-                {
-                    Log(L"Invalid channel count: 0");
-                    channels = 1; // Default to mono
-                }
-
-                // Check for integer overflow
-                UINT64 totalSamples64 = static_cast<UINT64>(frames) * static_cast<UINT64>(channels);
-                if (totalSamples64 > UINT32_MAX)
-                {
-                    Log(L"Sample count overflow: " + std::to_wstring(totalSamples64));
-                    break;
-                }
-
-                UINT32 totalSamples = static_cast<UINT32>(totalSamples64);
-
-                try
-                {
-                    if (tag == WAVE_FORMAT_IEEE_FLOAT && bps == 32)
-                    {
-                        const float* samples = reinterpret_cast<const float*>(data);
-                        for (UINT32 i = 0; i < totalSamples; ++i)
-                        {
-                            float val = samples[i];
-                            if (val < 0)
-                                val = -val;
-                            if (val > peak)
-                                peak = val;
-                        }
-                    }
-                    else if (tag == WAVE_FORMAT_PCM && bps == 16)
-                    {
-                        const int16_t* samples = reinterpret_cast<const int16_t*>(data);
-                        for (UINT32 i = 0; i < totalSamples; ++i)
-                        {
-                            float val = samples[i] / 32768.0f;
-                            if (val < 0)
-                                val = -val;
-                            if (val > peak)
-                                peak = val;
-                        }
-                    }
-                    else if (tag == WAVE_FORMAT_PCM && bps == 24)
-                    {
-                        // 24-bit PCM is stored as 3 bytes per sample
-                        const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
-
-                        // Check if we have enough bytes for all samples (3 bytes per sample)
-                        UINT64 byteCount = static_cast<UINT64>(totalSamples) * 3;
-                        if (byteCount > SIZE_MAX)
-                        {
-                            Log(L"Byte count overflow for 24-bit audio");
-                            break;
-                        }
-
-                        for (UINT32 i = 0; i < totalSamples; ++i)
-                        {
-                            // Load 3 bytes into 32-bit integer (sign-extended)
-                            int32_t sample = (p[3 * i] << 8) | (p[3 * i + 1] << 16) | (p[3 * i + 2] << 24);
-                            sample >>= 8; // Shift back to get correct sign extension
-
-                            // Convert to float -1.0 to 1.0 (normalize by 2^23)
-                            float val = sample / 8388608.0f;
-                            if (val < 0)
-                                val = -val;
-                            if (val > peak)
-                                peak = val;
-                        }
-                    }
-                    else if (tag == WAVE_FORMAT_PCM && bps == 32)
-                    {
-                        const int32_t* samples = reinterpret_cast<const int32_t*>(data);
-                        for (UINT32 i = 0; i < totalSamples; ++i)
-                        {
-                            // Normalize by 2^31
-                            float val = samples[i] / 2147483648.0f;
-                            if (val < 0)
-                                val = -val;
-                            if (val > peak)
-                                peak = val;
-                        }
-                    }
-                    else
-                    {
-                        // Unsupported format
-                        Log(L"Unsupported audio format: tag=" + std::to_wstring(tag) + L", bps=" +
-                            std::to_wstring(bps));
-                    }
-                }
-                catch (...)
-                {
-                    Log(L"Exception during audio processing");
-                }
-
-                // Temporary logging to verify data is coming in
-                Log(L"PollMicrophone: peak=" + std::to_wstring(peak) + L", format tag=" + std::to_wstring(tag) +
-                    L", bps=" + std::to_wstring(bps));
-            }
-
-            // For better visualization - slight level smoothing (to avoid sharp jumps)
-            // In a real implementation this could be a more complex algorithm
-            float current_level = mic_level_.load();
-            float smoothed_level = current_level * 0.5f + peak * 0.5f; // More responsive smoothing
-            mic_level_.store(smoothed_level);
-
-            // Check if thread should exit before continuing
-            if (!audio_thread_running_.load())
-            {
-                Log(L"PollMicrophone: Thread signaled to exit, breaking");
-                break;
-            }
-
-            hr = capture_client_->ReleaseBuffer(frames);
-            if (FAILED(hr))
-            {
-                Log(L"PollMicrophone: ReleaseBuffer failed, hr=0x" + std::to_wstring(hr));
-                break;
-            }
-
-            // Check if thread should exit before getting next packet
-            if (!audio_thread_running_.load())
-            {
-                Log(L"PollMicrophone: Thread signaled to exit before next packet");
-                break;
-            }
-
-            hr = capture_client_->GetNextPacketSize(&pkt_len);
-            if (FAILED(hr))
-            {
-                Log(L"PollMicrophone: GetNextPacketSize failed after processing, hr=0x" + std::to_wstring(hr));
-                break;
-            }
-        }
-    }
-    catch (const std::exception& ex)
-    {
-        Log(L"PollMicrophone exception: " + std::wstring(ex.what(), ex.what() + strlen(ex.what())));
-    }
-    catch (...)
-    {
-        Log(L"PollMicrophone: unknown exception");
-    }
-}
+// Audio capture (WASAPI pipeline, thread, SEH wrapper) lives in
 
 void ArgumentDebuggerWindow::Cleanup()
 {
     Log(L"Cleanup started");
 
-    // Stop audio first if still running
-    if (audio_client_)
-    {
-        try
-        {
-            audio_client_->Stop();
-            Log(L"Audio client stopped in cleanup");
-        }
-        catch (...)
-        {
-            Log(L"Exception stopping audio client in cleanup");
-        }
-    }
-
-    // Reset audio COM objects first
-    capture_client_.Reset();
-    audio_client_.Reset();
-    capture_device_.Reset();
-    device_enumerator_.Reset();
+    // The audio pipeline is owned by `audio_capture_` and released either by
+    // its Stop() in OnDestroy or by its destructor.
 
     // Reset all graphics ComPtr objects to automatically release resources.
     vertex_shader_.Reset();
@@ -1589,13 +1132,6 @@ void ArgumentDebuggerWindow::Cleanup()
     white_brush_.Reset();
     green_brush_.Reset();
     yellow_brush_.Reset();
-
-    // Audio thread and event are already closed in OnDestroy
-    if (mix_format_)
-    {
-        CoTaskMemFree(mix_format_);
-        mix_format_ = nullptr;
-    }
 
     Log(L"Cleanup finished");
 }

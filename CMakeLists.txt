@@ -23,6 +23,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_CURRENT_SOURCE_DIR}/build)
 add_executable(cloud-streaming-args-debugger
     WIN32                        # Specify that the application uses WinMain instead of main
     cli_args_debugger.cpp
+    audio_capture.cpp
     log_manager.cpp
     path_info.cpp
     seh_wrapper.cpp
