@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.15)
 project(CloudStreamingArgsDebugger LANGUAGES CXX)
 
+# Use C++20 project-wide. The GitHub Actions build.yml invokes cl with
+# /std:c++20 directly; keep the CMake path in sync so the two build modes
+# compile the same language.
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 # Specify that this is a Win32 application with wWinMain entry point
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS")
 

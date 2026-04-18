@@ -4,9 +4,11 @@ project(ArgumentDebuggerTests LANGUAGES CXX)
 # Explicitly specify that tests are console applications
 set(CMAKE_WIN32_EXECUTABLE OFF)
 
-# Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
+# Set C++ standard (kept in sync with the top-level CMakeLists.txt and with
+# the /std:c++20 flag used by .github/workflows/build.yml).
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Find GoogleTest package
 find_package(GTest CONFIG REQUIRED)
