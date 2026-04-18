@@ -7,7 +7,7 @@
 #include <windows.h>
 
 #include <algorithm>
-#include <cctype>
+#include <cwctype>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -45,7 +45,8 @@ TEST(PathInfo, ExecutablePathEndsInExe)
     const std::wstring p = path_info::ExecutablePath();
     ASSERT_GE(p.size(), 4u);
     std::wstring tail = p.substr(p.size() - 4);
-    std::transform(tail.begin(), tail.end(), tail.begin(), [](wchar_t c) { return std::towlower(c); });
+    std::transform(tail.begin(), tail.end(), tail.begin(),
+                   [](wchar_t c) { return static_cast<wchar_t>(::towlower(c)); });
     EXPECT_EQ(tail, L".exe");
 }
 

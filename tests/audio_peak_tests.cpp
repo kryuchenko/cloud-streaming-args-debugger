@@ -5,6 +5,7 @@
 // clang-format off
 #include <windows.h>
 #include <mmreg.h>
+#include <ks.h>        // must precede <ksmedia.h>
 #include <ksmedia.h>
 // clang-format on
 
