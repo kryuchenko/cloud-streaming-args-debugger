@@ -30,8 +30,6 @@ template <typename Fill> std::wstring FillWithGrowingBuffer(Fill fill)
     for (int attempt = 0; attempt < 6; ++attempt)
     {
         SetLastError(ERROR_SUCCESS);
-        // `&buf[0]` yields `wchar_t*` in both C++17 and C++20; `buf.data()`
-        // would only do so in C++20. Tests compile with C++17.
         DWORD len = fill(&buf[0], static_cast<DWORD>(buf.size()));
         if (len == 0)
             return {};
