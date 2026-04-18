@@ -41,7 +41,9 @@
 #include <iomanip> // For setw/setfill
 #include <knownfolders.h>
 #include <mmdeviceapi.h>
-#include <share.h> // For _wfsopen share flags
+#include <mmsystem.h> // For PlaySound
+#include <psapi.h>    // For GetProcessMemoryInfo
+#include <share.h>    // For _wfsopen share flags
 #include <shlobj.h>
 #include <sstream>
 #include <stdexcept>
@@ -49,9 +51,7 @@
 #include <thread>
 #include <vector>
 #include <windows.h>
-#include <mmsystem.h>  // For PlaySound
 #include <wrl/client.h>
-#include <psapi.h>  // For GetProcessMemoryInfo
 
 // Debug memory leak detection
 #ifdef _DEBUG
@@ -136,7 +136,8 @@ constexpr const wchar_t* kWindowCaption = L"Cloud Streaming Args Debugger";
 
 // Description text for the window
 const std::vector<std::wstring> kDescriptionLines = {
-    L"Cloud Streaming Args Debugger", L"This utility displays all command-line arguments for cloud streaming applications.",
+    L"Cloud Streaming Args Debugger",
+    L"This utility displays all command-line arguments for cloud streaming applications.",
     L"Type 'exit', 'save', 'read', 'logs', 'path', 'sound' or 'memory' and press Enter to execute commands."};
 
 constexpr float kMargin = 20.0f;
@@ -196,6 +197,21 @@ class ArgumentDebuggerWindow
     void Cleanup();
     void UpdateRotation(float delta_time);
 
+    // RenderFrame is split into small section methods. RenderFrame itself just
+    // orchestrates the sequence; each helper owns one visible region of the UI.
+    void UpdateFrameTiming();
+    void RenderCube(const D3D11_VIEWPORT& vp);
+    void RenderTextHud(const D2D1_SIZE_F& size, float& y_pos);
+    void RenderLoadedDataPanel(const D2D1_SIZE_F& size);
+    void RenderPathsPanel(const D2D1_SIZE_F& size);
+    void RenderInputPrompt(const D2D1_SIZE_F& size);
+    void RenderQrBitmap(const D2D1_SIZE_F& size);
+    void RenderVolumeMeter(const D2D1_SIZE_F& size);
+    // Returns false if the D2D device was lost and has been recreated; in that
+    // case the caller should skip Present and move on to the next frame.
+    bool EndOverlay();
+    void PresentFrame();
+
   private:
     // Update QR code – here we add the FPS synchronization logic.
     void UpdateQrCode(ULONGLONG current_time);
@@ -206,13 +222,13 @@ class ArgumentDebuggerWindow
 
     // Helper to load entire log file into loaded_data_
     void ShowLogs();
-    
+
     // Helper to calculate and cache path information once
     void CalculatePathInfo();
-    
+
     // Play telephone-like beeps for 1 minute
     void PlayTelephoneBeeps();
-    
+
     // Show memory usage statistics
     void ShowMemoryStats();
 
@@ -227,9 +243,9 @@ class ArgumentDebuggerWindow
     std::wstring command_status_;
     std::wstring loaded_data_;
     std::wstring loaded_data_title_; // Title for the loaded data section
-    bool show_paths_ = false; // Flag to control file paths display
-    bool show_logs_ = false; // Flag to control logs display
-    
+    bool show_paths_ = false;        // Flag to control file paths display
+    bool show_logs_ = false;         // Flag to control logs display
+
     // Cached path information to avoid expensive system calls every frame
     std::vector<std::pair<std::wstring, std::wstring>> cached_path_items_;
 
@@ -248,8 +264,8 @@ class ArgumentDebuggerWindow
     ComPtr<IDWriteFactory> dwrite_factory_;
     ComPtr<IDWriteTextFormat> text_format_;
     ComPtr<IDWriteTextFormat> small_text_format_; // Smaller font for logs
-    ComPtr<IDWriteTextFormat> data_text_format_; // Medium font for loaded data
-    
+    ComPtr<IDWriteTextFormat> data_text_format_;  // Medium font for loaded data
+
     // D2D Brushes - created once and reused
     ComPtr<ID2D1SolidColorBrush> white_brush_;
     ComPtr<ID2D1SolidColorBrush> green_brush_;
@@ -381,7 +397,7 @@ int ArgumentDebuggerWindow::RunMessageLoop()
         static ULONGLONG lastFrameTime = 0;
         ULONGLONG currentFrameTime = GetTickCount64();
         const ULONGLONG targetFrameTime = 16; // ~60 FPS (1000ms / 60 = 16.67ms)
-        
+
         if (currentFrameTime - lastFrameTime < targetFrameTime)
         {
             // Sleep to maintain target frame rate
@@ -400,7 +416,7 @@ int ArgumentDebuggerWindow::RunMessageLoop()
         catch (const std::exception& ex)
         {
             // Safe string conversion with bounds checking
-            size_t msgLen = strnlen_s(ex.what(), 1024);  // Limit to 1KB
+            size_t msgLen = strnlen_s(ex.what(), 1024); // Limit to 1KB
             std::wstring wideMsg;
             if (msgLen > 0)
             {
@@ -637,7 +653,7 @@ void ArgumentDebuggerWindow::CreateD2DResources()
     small_text_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
     // Use trailing alignment for device name text to align to the right
     small_text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-    
+
     // Create a medium text format for loaded data (double the size of small font)
     DX_CALL(dwrite_factory_->CreateTextFormat(L"Consolas", nullptr, // Using monospaced font for data
                                               DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -648,7 +664,7 @@ void ArgumentDebuggerWindow::CreateD2DResources()
     data_text_format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     data_text_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
     data_text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    
+
     // Create brushes once during initialization
     DX_CALL(d2d_render_target_->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), white_brush_.GetAddressOf()),
             "Failed to create white brush.");
@@ -808,29 +824,48 @@ void ArgumentDebuggerWindow::UpdateQrCode(ULONGLONG current_time)
 
 void ArgumentDebuggerWindow::RenderFrame()
 {
-    ULONGLONG current_time = GetTickCount64();
-    float delta_time = (current_time - last_time_) / 1000.0f;
-    last_time_ = current_time;
-
-    // Update the instantaneous FPS
-    current_fps_ = (delta_time > 0.0f) ? (1.0f / delta_time) : 0.0f;
-
-    UpdateRotation(delta_time);
-
-    // Clear the D3D render target
-    FLOAT clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    immediate_context_->ClearRenderTargetView(d3d_render_target_view_.Get(), clear_color);
-    immediate_context_->OMSetRenderTargets(1, d3d_render_target_view_.GetAddressOf(), nullptr);
+    UpdateFrameTiming();
 
     RECT rc;
     GetClientRect(window_handle_, &rc);
-    D3D11_VIEWPORT vp;
+    D3D11_VIEWPORT vp{};
     vp.Width = static_cast<float>(rc.right - rc.left);
     vp.Height = static_cast<float>(rc.bottom - rc.top);
-    vp.MinDepth = 0.0f;
     vp.MaxDepth = 1.0f;
-    vp.TopLeftX = 0.0f;
-    vp.TopLeftY = 0.0f;
+    RenderCube(vp);
+
+    d2d_render_target_->BeginDraw();
+    UpdateQrCode(GetTickCount64());
+
+    const D2D1_SIZE_F size = d2d_render_target_->GetSize();
+    float y_pos = kMargin;
+    RenderTextHud(size, y_pos);
+    RenderLoadedDataPanel(size);
+    RenderPathsPanel(size);
+    RenderInputPrompt(size);
+    RenderQrBitmap(size);
+    RenderVolumeMeter(size);
+
+    if (!EndOverlay()) // device lost → D2D resources already recreated
+        return;
+
+    PresentFrame();
+}
+
+void ArgumentDebuggerWindow::UpdateFrameTiming()
+{
+    ULONGLONG current_time = GetTickCount64();
+    float delta_time = (current_time - last_time_) / 1000.0f;
+    last_time_ = current_time;
+    current_fps_ = (delta_time > 0.0f) ? (1.0f / delta_time) : 0.0f;
+    UpdateRotation(delta_time);
+}
+
+void ArgumentDebuggerWindow::RenderCube(const D3D11_VIEWPORT& vp)
+{
+    FLOAT clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    immediate_context_->ClearRenderTargetView(d3d_render_target_view_.Get(), clear_color);
+    immediate_context_->OMSetRenderTargets(1, d3d_render_target_view_.GetAddressOf(), nullptr);
     immediate_context_->RSSetViewports(1, &vp);
 
     UINT stride = sizeof(SimpleVertex);
@@ -844,7 +879,6 @@ void ArgumentDebuggerWindow::RenderFrame()
     XMVECTOR eye = XMVectorSet(0.0f, 2.0f, -5.0f, 0.0f);
     XMVECTOR at = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
     XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-
     XMMATRIX view = XMMatrixLookAtLH(eye, at, up);
     XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV4, vp.Width / vp.Height, 0.01f, 100.0f);
 
@@ -855,19 +889,11 @@ void ArgumentDebuggerWindow::RenderFrame()
     immediate_context_->VSSetShader(vertex_shader_.Get(), nullptr, 0);
     immediate_context_->VSSetConstantBuffers(0, 1, constant_buffer_.GetAddressOf());
     immediate_context_->PSSetShader(pixel_shader_.Get(), nullptr, 0);
-
     immediate_context_->DrawIndexed(36, 0, 0);
+}
 
-    // Begin Direct2D drawing.
-    d2d_render_target_->BeginDraw();
-
-    // Update the QR code (no more than once every 5 seconds).
-    UpdateQrCode(current_time);
-
-    D2D1_SIZE_F size = d2d_render_target_->GetSize();
-    float y_pos = kMargin;
-
-    // Draw description lines.
+void ArgumentDebuggerWindow::RenderTextHud(const D2D1_SIZE_F& size, float& y_pos)
+{
     for (const auto& line : kDescriptionLines)
     {
         D2D1_RECT_F rect = D2D1::RectF(kMargin, y_pos, size.width - kMargin, y_pos + kLineHeight);
@@ -877,16 +903,12 @@ void ArgumentDebuggerWindow::RenderFrame()
     }
     y_pos += kLineHeight;
 
-    // Draw command-line argument header.
     std::wstring cli_text = BuildCliHeaderText(args_);
-    {
-        D2D1_RECT_F rect = D2D1::RectF(kMargin, y_pos, size.width - kMargin, y_pos + kLineHeight);
-        d2d_render_target_->DrawText(cli_text.c_str(), static_cast<UINT32>(cli_text.size()), text_format_.Get(), rect,
-                                     green_brush_.Get());
-    }
+    D2D1_RECT_F header_rect = D2D1::RectF(kMargin, y_pos, size.width - kMargin, y_pos + kLineHeight);
+    d2d_render_target_->DrawText(cli_text.c_str(), static_cast<UINT32>(cli_text.size()), text_format_.Get(),
+                                 header_rect, green_brush_.Get());
     y_pos += kLineHeight;
 
-    // Draw the actual command-line arguments (if any).
     if (!args_.empty())
     {
         std::wstring formatted_args = BuildCliArgsText(args_);
@@ -897,57 +919,53 @@ void ArgumentDebuggerWindow::RenderFrame()
     }
 
     y_pos += 10.0f;
-    // Additional drawing: display command execution status.
+    D2D1_RECT_F status_rect = D2D1::RectF(kMargin, size.height - 220.0f, size.width - kMargin, size.height - 190.0f);
+    d2d_render_target_->DrawText(command_status_.c_str(), static_cast<UINT32>(command_status_.size()),
+                                 text_format_.Get(), status_rect, white_brush_.Get());
+}
+
+void ArgumentDebuggerWindow::RenderLoadedDataPanel(const D2D1_SIZE_F& size)
+{
+    if (!show_logs_ || loaded_data_.empty())
+        return;
+
+    D2D1_RECT_F data_rect = D2D1::RectF(size.width - 750.0f, kMargin, size.width - kMargin, kMargin + 380.0f);
+    d2d_render_target_->DrawText(loaded_data_.c_str(), static_cast<UINT32>(loaded_data_.size()),
+                                 data_text_format_.Get(), data_rect, green_brush_.Get());
+
+    if (!loaded_data_title_.empty())
     {
-        D2D1_RECT_F status_rect =
-            D2D1::RectF(kMargin, size.height - 220.0f, size.width - kMargin, size.height - 190.0f);
-        d2d_render_target_->DrawText(command_status_.c_str(), static_cast<UINT32>(command_status_.size()),
-                                     text_format_.Get(), status_rect, white_brush_.Get());
+        D2D1_RECT_F title_rect = D2D1::RectF(size.width - 750.0f, kMargin - 30.0f, size.width - kMargin, kMargin);
+        d2d_render_target_->DrawText(loaded_data_title_.c_str(), static_cast<UINT32>(loaded_data_title_.size()),
+                                     text_format_.Get(), title_rect, yellow_brush_.Get());
     }
+}
 
-    // Draw loaded data (if any) in the top-right corner.
-    if (show_logs_ && !loaded_data_.empty())
+void ArgumentDebuggerWindow::RenderPathsPanel(const D2D1_SIZE_F& size)
+{
+    if (!show_paths_ || cached_path_items_.empty())
+        return;
+
+    constexpr float pathWidth = 400.0f;
+    constexpr float pathLineHeight = 25.0f;
+    const float pathEndX = size.width - kMargin;
+    const float pathStartX = pathEndX - pathWidth;
+    float currentY = size.height * 0.3f;
+
+    for (const auto& item : cached_path_items_)
     {
-        // Use a smaller font for logs and expand the display area
-        // Added padding at the bottom (reduced height by 20px)
-        D2D1_RECT_F data_rect = D2D1::RectF(size.width - 750.0f, kMargin, size.width - kMargin, kMargin + 380.0f);
-        d2d_render_target_->DrawText(loaded_data_.c_str(), static_cast<UINT32>(loaded_data_.size()),
-                                     data_text_format_.Get(), data_rect, green_brush_.Get());
-
-        // Add a title for the loaded data section
-        if (!loaded_data_title_.empty())
-        {
-            D2D1_RECT_F title_rect = D2D1::RectF(size.width - 750.0f, kMargin - 30.0f, size.width - kMargin, kMargin);
-            d2d_render_target_->DrawText(loaded_data_title_.c_str(), static_cast<UINT32>(loaded_data_title_.size()), 
-                                         text_format_.Get(), title_rect, yellow_brush_.Get());
-        }
+        std::wstring fullLine = item.first + item.second;
+        D2D1_RECT_F rect = D2D1::RectF(pathStartX, currentY, pathEndX, currentY + pathLineHeight);
+        d2d_render_target_->DrawText(fullLine.c_str(), static_cast<UINT32>(fullLine.size()), small_text_format_.Get(),
+                                     rect, white_brush_.Get());
+        currentY += pathLineHeight;
     }
+}
 
-    // Display file paths only if enabled and cached data is available
-    if (show_paths_ && !cached_path_items_.empty())
-    {
-        // Use smaller font for path information
-        // Position at the right edge, aligned with mic indicators
-        float pathWidth = 400.0f;  // Width of the path info block
-        float pathEndX = size.width - kMargin;  // Same margin as mic indicators
-        float pathStartX = pathEndX - pathWidth;  // Left edge of the path block
-        float pathStartY = size.height * 0.3f; // Move up a bit to fit more items
-        float pathLineHeight = 25.0f;
-
-        // Draw cached path information with smaller font
-        float currentY = pathStartY;
-        for (const auto& item : cached_path_items_)
-        {
-            std::wstring fullLine = item.first + item.second;
-            D2D1_RECT_F rect = D2D1::RectF(pathStartX, currentY, pathEndX, currentY + pathLineHeight);
-            d2d_render_target_->DrawText(fullLine.c_str(), static_cast<UINT32>(fullLine.size()), small_text_format_.Get(),
-                                         rect, white_brush_.Get());
-            currentY += pathLineHeight;
-        }
-    } // End of if (show_paths_)
-
-    // Input field and prompt.
-    std::wstring exit_prompt = L"Type 'exit', 'save', 'read', 'logs', 'path', 'sound' or 'memory' and press Enter:";
+void ArgumentDebuggerWindow::RenderInputPrompt(const D2D1_SIZE_F& size)
+{
+    const std::wstring exit_prompt =
+        L"Type 'exit', 'save', 'read', 'logs', 'path', 'sound' or 'memory' and press Enter:";
     D2D1_RECT_F exit_prompt_rect =
         D2D1::RectF(kMargin, size.height - 100.0f, size.width - kMargin, size.height - 70.0f);
     d2d_render_target_->DrawText(exit_prompt.c_str(), static_cast<UINT32>(exit_prompt.size()), text_format_.Get(),
@@ -956,119 +974,96 @@ void ArgumentDebuggerWindow::RenderFrame()
     D2D1_RECT_F user_input_rect = D2D1::RectF(kMargin, size.height - 60.0f, size.width - kMargin, size.height - 30.0f);
     d2d_render_target_->DrawText(user_input_.c_str(), static_cast<UINT32>(user_input_.size()), text_format_.Get(),
                                  user_input_rect, green_brush_.Get());
+}
 
-    // Draw the QR code in the bottom-left corner.
-    if (qr_bitmap_)
-    {
-        constexpr int qr_size = 375;
-        constexpr float qr_margin = 60.0f;
-        float qr_x = qr_margin;
-        float qr_y = size.height - qr_size - qr_margin - 100.0f - (size.height * 0.2f); // Raised by 20% of screen height
-        d2d_render_target_->DrawBitmap(qr_bitmap_.Get(), D2D1::RectF(qr_x, qr_y, qr_x + qr_size, qr_y + qr_size));
-    }
+void ArgumentDebuggerWindow::RenderQrBitmap(const D2D1_SIZE_F& size)
+{
+    if (!qr_bitmap_)
+        return;
+    constexpr int qr_size = 375;
+    constexpr float qr_margin = 60.0f;
+    const float qr_x = qr_margin;
+    const float qr_y = size.height - qr_size - qr_margin - 100.0f - (size.height * 0.2f);
+    d2d_render_target_->DrawBitmap(qr_bitmap_.Get(), D2D1::RectF(qr_x, qr_y, qr_x + qr_size, qr_y + qr_size));
+}
 
-    // --- Volume Meter (L/R) ---
-    if (audio_capture_.IsAvailable())
-    {
-        float level = audio_capture_.Level(); // 0..1
-
-        // Draw two volume bars - one for left, one for right
-        float bar_w = 30.0f, bar_h = 150.0f;
-        float spacing = 15.0f;
-        float total_width = bar_w * 2 + spacing;
-        float x0 = size.width - kMargin - total_width;
-        float y0 = size.height - kMargin - bar_h;
-
-        // Device name title with improved layout
-        const std::wstring& dev_name = audio_capture_.Name();
-        std::wstring dev_title = L"Mic: " + (dev_name.empty() ? L"<unknown>" : dev_name);
-
-        // Position device name at the right edge of the screen
-        // parameters for the text area
-        float devAreaWidth = 200.0f;           // width of the area
-        float devAreaHeight = 2 * kLineHeight; // two lines high
-        float marginRight = kMargin;           // margin from right edge of screen
-        float marginBottom = 5.0f;             // margin above bars
-
-        // right edge of the area - just after the screen margin
-        float devRight = size.width - marginRight;
-        // left - right minus area width
-        float devLeft = devRight - devAreaWidth;
-        // bottom of area - y0 (top of the bars)
-        // y0 is already defined: y0 = size.height - kMargin - bar_h
-        // top - bottom minus area height and small margin
-        float devBottom = y0;
-        float devTop = devBottom - devAreaHeight - marginBottom;
-
-        D2D1_RECT_F dev_rect = D2D1::RectF(devLeft, devTop, devRight, devBottom);
-
-        // Draw multiline text
-        d2d_render_target_->DrawText(dev_title.c_str(), (UINT32)dev_title.size(), small_text_format_.Get(), dev_rect,
-                                     white_brush_.Get());
-
-        // Left channel (using the same level for both channels in this demo)
-        // In a real stereo implementation, you'd capture separate L/R levels
-        float left_level = level;
-        float left_filled = bar_h * left_level;
-
-        // Left bar outline
-        d2d_render_target_->DrawRectangle(D2D1::RectF(x0, y0, x0 + bar_w, y0 + bar_h), white_brush_.Get(), 2.0f);
-
-        // Left bar fill
-        d2d_render_target_->FillRectangle(D2D1::RectF(x0, y0 + (bar_h - left_filled), x0 + bar_w, y0 + bar_h),
-                                          green_brush_.Get());
-
-        // Right channel (using same level for demo, but with slight variation)
-        float right_level = level * 0.9f; // Slight variation for demo
-        float right_filled = bar_h * right_level;
-        float right_x = x0 + bar_w + spacing;
-
-        // Right bar outline
-        d2d_render_target_->DrawRectangle(D2D1::RectF(right_x, y0, right_x + bar_w, y0 + bar_h), white_brush_.Get(),
-                                          2.0f);
-
-        // Right bar fill
-        d2d_render_target_->FillRectangle(
-            D2D1::RectF(right_x, y0 + (bar_h - right_filled), right_x + bar_w, y0 + bar_h), green_brush_.Get());
-
-        // Draw L/R labels
-        std::wstring left_label = L"L";
-        std::wstring right_label = L"R";
-
-        D2D1_RECT_F left_label_rect = D2D1::RectF(x0, y0 - 30.0f, x0 + bar_w, y0);
-        D2D1_RECT_F right_label_rect = D2D1::RectF(right_x, y0 - 30.0f, right_x + bar_w, y0);
-
-        d2d_render_target_->DrawText(left_label.c_str(), (UINT32)left_label.size(), text_format_.Get(), left_label_rect,
-                                     yellow_brush_.Get());
-        d2d_render_target_->DrawText(right_label.c_str(), (UINT32)right_label.size(), text_format_.Get(),
-                                     right_label_rect, yellow_brush_.Get());
-    }
-    else
+void ArgumentDebuggerWindow::RenderVolumeMeter(const D2D1_SIZE_F& size)
+{
+    if (!audio_capture_.IsAvailable())
     {
         std::wstring no_mic = L"No microphone detected";
         D2D1_RECT_F r =
             D2D1::RectF(size.width - 300.f, size.height - 50.f, size.width - kMargin, size.height - kMargin);
-        d2d_render_target_->DrawText(no_mic.c_str(), (UINT32)no_mic.size(), text_format_.Get(), r, yellow_brush_.Get());
+        d2d_render_target_->DrawText(no_mic.c_str(), static_cast<UINT32>(no_mic.size()), text_format_.Get(), r,
+                                     yellow_brush_.Get());
+        return;
     }
 
-    // End Direct2D drawing with proper error handling
-    HRESULT hrEnd = d2d_render_target_->EndDraw();
-    if (hrEnd == D2DERR_RECREATE_TARGET)
+    const float level = audio_capture_.Level();
+
+    constexpr float bar_w = 30.0f;
+    constexpr float bar_h = 150.0f;
+    constexpr float spacing = 15.0f;
+    const float total_width = bar_w * 2 + spacing;
+    const float x0 = size.width - kMargin - total_width;
+    const float y0 = size.height - kMargin - bar_h;
+
+    const std::wstring& dev_name = audio_capture_.Name();
+    const std::wstring dev_title = L"Mic: " + (dev_name.empty() ? L"<unknown>" : dev_name);
+
+    constexpr float devAreaWidth = 200.0f;
+    constexpr float devAreaHeight = 2 * kLineHeight;
+    constexpr float marginBottom = 5.0f;
+    const float devRight = size.width - kMargin;
+    const float devLeft = devRight - devAreaWidth;
+    const float devBottom = y0;
+    const float devTop = devBottom - devAreaHeight - marginBottom;
+
+    d2d_render_target_->DrawText(dev_title.c_str(), static_cast<UINT32>(dev_title.size()), small_text_format_.Get(),
+                                 D2D1::RectF(devLeft, devTop, devRight, devBottom), white_brush_.Get());
+
+    // Left channel bar.
+    const float left_filled = bar_h * level;
+    d2d_render_target_->DrawRectangle(D2D1::RectF(x0, y0, x0 + bar_w, y0 + bar_h), white_brush_.Get(), 2.0f);
+    d2d_render_target_->FillRectangle(D2D1::RectF(x0, y0 + (bar_h - left_filled), x0 + bar_w, y0 + bar_h),
+                                      green_brush_.Get());
+
+    // Right channel bar — slight variation for visual distinction from mono.
+    const float right_level = level * 0.9f;
+    const float right_filled = bar_h * right_level;
+    const float right_x = x0 + bar_w + spacing;
+    d2d_render_target_->DrawRectangle(D2D1::RectF(right_x, y0, right_x + bar_w, y0 + bar_h), white_brush_.Get(), 2.0f);
+    d2d_render_target_->FillRectangle(D2D1::RectF(right_x, y0 + (bar_h - right_filled), right_x + bar_w, y0 + bar_h),
+                                      green_brush_.Get());
+
+    const std::wstring left_label = L"L";
+    const std::wstring right_label = L"R";
+    d2d_render_target_->DrawText(left_label.c_str(), static_cast<UINT32>(left_label.size()), text_format_.Get(),
+                                 D2D1::RectF(x0, y0 - 30.0f, x0 + bar_w, y0), yellow_brush_.Get());
+    d2d_render_target_->DrawText(right_label.c_str(), static_cast<UINT32>(right_label.size()), text_format_.Get(),
+                                 D2D1::RectF(right_x, y0 - 30.0f, right_x + bar_w, y0), yellow_brush_.Get());
+}
+
+bool ArgumentDebuggerWindow::EndOverlay()
+{
+    HRESULT hr = d2d_render_target_->EndDraw();
+    if (hr == D2DERR_RECREATE_TARGET)
     {
-        // Device lost, resources need to be recreated
         Log(L"Device lost detected, recreating D2D resources");
-        // Reset brushes and text formats before recreating
         white_brush_.Reset();
         green_brush_.Reset();
         yellow_brush_.Reset();
         data_text_format_.Reset();
         CreateD2DResources();
-        return;
+        return false;
     }
-    if (FAILED(hrEnd))
+    if (FAILED(hr))
         throw std::runtime_error("Failed to end Direct2D draw.");
+    return true;
+}
 
-    // Log FPS no more than once every 5 seconds to avoid cluttering the log
+void ArgumentDebuggerWindow::PresentFrame()
+{
     static ULONGLONG lastFpsLogTime = 0;
     ULONGLONG currentTime = GetTickCount64();
     if (currentTime - lastFpsLogTime > 5000)
@@ -1077,14 +1072,15 @@ void ArgumentDebuggerWindow::RenderFrame()
         lastFpsLogTime = currentTime;
     }
 
-    // Present the frame on screen with error checking
-    // Use no VSync on Wine/Proton for better performance
-    bool isWine = GetModuleHandleW(L"ntdll.dll") && GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version");
-    UINT syncInterval = isWine ? 0 : 1; // 0 = no VSync, 1 = VSync
-    HRESULT hrPresent = swap_chain_->Present(syncInterval, 0);
-    if (hrPresent == DXGI_ERROR_DEVICE_REMOVED || hrPresent == DXGI_ERROR_DEVICE_RESET)
+    // Skip VSync under Wine/Proton — blocking Present on Wine can starve the
+    // whole message loop, producing reported FPS in the single digits.
+    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+    const bool isWine = hNtdll && GetProcAddress(hNtdll, "wine_get_version");
+    const UINT syncInterval = isWine ? 0 : 1;
+
+    HRESULT hr = swap_chain_->Present(syncInterval, 0);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
     {
-        // Device was removed or reset, recreate resources
         Log(L"Device removed/reset detected, recreating all graphics resources");
         CreateDeviceAndSwapChain(static_cast<UINT>(d2d_render_target_->GetSize().width),
                                  static_cast<UINT>(d2d_render_target_->GetSize().height));
@@ -1093,7 +1089,7 @@ void ArgumentDebuggerWindow::RenderFrame()
         CreateShadersAndGeometry();
         return;
     }
-    if (FAILED(hrPresent))
+    if (FAILED(hr))
         throw std::runtime_error("Failed to present frame.");
 }
 
@@ -1124,7 +1120,7 @@ void ArgumentDebuggerWindow::Cleanup()
     d3d_device_.Reset();
     text_format_.Reset();
     small_text_format_.Reset(); // Release the small text format
-    data_text_format_.Reset(); // Release the data text format
+    data_text_format_.Reset();  // Release the data text format
     dwrite_factory_.Reset();
     d2d_render_target_.Reset();
     d2d_factory_.Reset();
@@ -1280,28 +1276,30 @@ void ArgumentDebuggerWindow::CalculatePathInfo()
     cached_path_items_ = path_info::Collect();
 }
 
-void ArgumentDebuggerWindow::PlayTelephoneBeeps()  // Name kept for compatibility
+void ArgumentDebuggerWindow::PlayTelephoneBeeps() // Name kept for compatibility
 {
     // Create a separate thread to play beeps so UI doesn't freeze
-    std::thread beepThread([]() {
-        // Low-frequency continuous beep pattern
-        const int beepFrequency = 300;  // 300Hz - lower tone
-        const int beepDuration = 2000;  // 2 seconds beep
-        const int pauseDuration = 2000; // 2 seconds pause
-        const int totalDuration = 60000; // 1 minute total
-        
-        DWORD startTime = GetTickCount();
-        
-        while (GetTickCount() - startTime < totalDuration)
+    std::thread beepThread(
+        []()
         {
-            // Single long beep
-            Beep(beepFrequency, beepDuration);
-            
-            // Pause
-            Sleep(pauseDuration);
-        }
-    });
-    
+            // Low-frequency continuous beep pattern
+            const int beepFrequency = 300;   // 300Hz - lower tone
+            const int beepDuration = 2000;   // 2 seconds beep
+            const int pauseDuration = 2000;  // 2 seconds pause
+            const int totalDuration = 60000; // 1 minute total
+
+            DWORD startTime = GetTickCount();
+
+            while (GetTickCount() - startTime < totalDuration)
+            {
+                // Single long beep
+                Beep(beepFrequency, beepDuration);
+
+                // Pause
+                Sleep(pauseDuration);
+            }
+        });
+
     // Detach thread so it runs independently
     beepThread.detach();
 }
@@ -1321,7 +1319,7 @@ void ArgumentDebuggerWindow::ShowMemoryStats()
             stats += L"Private Bytes: " + std::to_wstring(pmc.PrivateUsage / 1024 / 1024) + L" MB\n";
             stats += L"Virtual Memory: " + std::to_wstring(pmc.PagefileUsage / 1024 / 1024) + L" MB\n";
             stats += L"Peak Virtual: " + std::to_wstring(pmc.PeakPagefileUsage / 1024 / 1024) + L" MB\n";
-            
+
             // Get system memory info
             MEMORYSTATUSEX memInfo;
             memInfo.dwLength = sizeof(MEMORYSTATUSEX);
@@ -1332,17 +1330,17 @@ void ArgumentDebuggerWindow::ShowMemoryStats()
                 stats += L"Available RAM: " + std::to_wstring(memInfo.ullAvailPhys / 1024 / 1024) + L" MB\n";
                 stats += L"Memory Load: " + std::to_wstring(memInfo.dwMemoryLoad) + L"%\n";
             }
-            
+
             // Add runtime information
             ULONGLONG uptime = GetTickCount64();
             stats += L"\n=== RUNTIME ===\n";
             stats += L"Uptime: " + std::to_wstring(uptime / 1000) + L" seconds\n";
-            
+
             // Store in loaded_data_ to display on screen
             loaded_data_ = stats;
             loaded_data_title_ = L"Memory Statistics:";
             show_logs_ = true;
-            
+
             command_status_ = L"Memory statistics displayed.";
             Log(L"Memory stats: WorkingSet=" + std::to_wstring(pmc.WorkingSetSize / 1024 / 1024) + L"MB");
         }
